@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "homepage": "https://nojiwon24.github.io/sql-visual",
+  "homepage": "https://jiwon0524.github.io/sql-visual",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
