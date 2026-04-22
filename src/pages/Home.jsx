@@ -1,6 +1,6 @@
 import { useStore } from "../store.jsx";
-import { PROBLEMS, STEPS } from "../../data/problems.js";
-import { CONCEPTS } from "../../data/concepts.js";
+import { PROBLEMS, STEPS } from "../data/problems.js";
+import { CONCEPTS } from "../data/concepts.js";
 
 export default function Home({ onNav }) {
   const { totalSolved, accuracy, solved, getStepProgress, recentProbs, darkMode } = useStore();

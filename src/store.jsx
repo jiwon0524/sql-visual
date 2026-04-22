@@ -1,5 +1,5 @@
 import { useState, useEffect, createContext, useContext } from "react";
-import { PROBLEMS } from "../data/problems.js";
+import { PROBLEMS } from "./data/problems.js";
 
 const StoreContext = createContext(null);
 
