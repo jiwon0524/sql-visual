@@ -1,179 +1,153 @@
-// ── server.js ─────────────────────────────────────────────────────────────────
-// 백엔드 진입점: Express 서버 설정
-// 실행: node server.js (또는 nodemon server.js)
-
+// ══════════════════════════════════════════════════════════════════════════════
+// SQLVisual Backend — server.js
+// Node.js + Express + SQLite + 네이버 OAuth 2.0
+// ══════════════════════════════════════════════════════════════════════════════
 import express from "express";
 import cors from "cors";
-import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import axios from "axios";
 import Database from "better-sqlite3";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const app = express();
+const app  = express();
 const PORT = 3001;
-const JWT_SECRET = process.env.JWT_SECRET || "sqlvisual_secret_2024";
+
+// ── 환경변수 ──────────────────────────────────────────────────────────────────
+// 실제 배포 시 .env 파일에 넣고 dotenv로 불러오세요
+const CONFIG = {
+  JWT_SECRET:          process.env.JWT_SECRET          || "sqlvisual_jwt_secret_2024",
+  NAVER_CLIENT_ID:     process.env.NAVER_CLIENT_ID     || "YOUR_NAVER_CLIENT_ID",
+  NAVER_CLIENT_SECRET: process.env.NAVER_CLIENT_SECRET || "YOUR_NAVER_CLIENT_SECRET",
+  NAVER_CALLBACK_URL:  process.env.NAVER_CALLBACK_URL  || "http://localhost:3001/api/auth/naver/callback",
+  FRONTEND_URL:        process.env.FRONTEND_URL        || "http://localhost:5173",
+};
 
 // ── 미들웨어 ──────────────────────────────────────────────────────────────────
-app.use(cors({ origin: "http://localhost:5173", credentials: true }));
+app.use(cors({ origin: CONFIG.FRONTEND_URL, credentials: true }));
 app.use(express.json());
 
-// ── DB 초기화 ─────────────────────────────────────────────────────────────────
+// ── SQLite DB ─────────────────────────────────────────────────────────────────
 const db = new Database(join(__dirname, "sqlvisual.db"));
+db.pragma("journal_mode = WAL");
 
-// 테이블 생성 (없으면 자동 생성)
 db.exec(`
-  -- 사용자 테이블
   CREATE TABLE IF NOT EXISTS users (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    username   TEXT UNIQUE NOT NULL,
-    password   TEXT NOT NULL,
-    created_at TEXT DEFAULT (datetime('now'))
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    naver_id      TEXT UNIQUE,
+    username      TEXT NOT NULL,
+    email         TEXT,
+    profile_image TEXT,
+    created_at    TEXT DEFAULT (datetime('now')),
+    updated_at    TEXT DEFAULT (datetime('now'))
   );
-
-  -- SQL 문서 테이블
   CREATE TABLE IF NOT EXISTS sql_documents (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id     INTEGER NOT NULL,
-    title       TEXT NOT NULL DEFAULT '제목 없음',
-    sql_code    TEXT DEFAULT '',
-    memo        TEXT DEFAULT '',
-    updated_at  TEXT DEFAULT (datetime('now')),
-    created_at  TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    title      TEXT NOT NULL DEFAULT '제목 없음',
+    sql_code   TEXT DEFAULT '',
+    memo       TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
-
-  -- 최근 작업 기록 테이블
-  CREATE TABLE IF NOT EXISTS recent_activity (
+  CREATE TABLE IF NOT EXISTS sql_history (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id     INTEGER NOT NULL,
-    doc_id      INTEGER,
-    action      TEXT,
-    created_at  TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id),
-    FOREIGN KEY (doc_id) REFERENCES sql_documents(id)
+    sql_code    TEXT,
+    executed_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
 `);
 
-// ── JWT 인증 미들웨어 ─────────────────────────────────────────────────────────
-function authMiddleware(req, res, next) {
+// ── JWT 미들웨어 ──────────────────────────────────────────────────────────────
+function auth(req, res, next) {
   const token = req.headers.authorization?.split(" ")[1];
   if (!token) return res.status(401).json({ error: "로그인이 필요합니다." });
-  try {
-    req.user = jwt.verify(token, JWT_SECRET);
-    next();
-  } catch {
-    res.status(401).json({ error: "인증이 만료되었습니다. 다시 로그인하세요." });
-  }
+  try { req.user = jwt.verify(token, CONFIG.JWT_SECRET); next(); }
+  catch { res.status(401).json({ error: "인증이 만료되었습니다. 다시 로그인하세요." }); }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// AUTH API
+// 네이버 OAuth
 // ══════════════════════════════════════════════════════════════════════════════
 
-// 회원가입
-app.post("/api/auth/register", async (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password)
-    return res.status(400).json({ error: "아이디와 비밀번호를 입력하세요." });
-  if (username.length < 3)
-    return res.status(400).json({ error: "아이디는 3자 이상이어야 합니다." });
-  if (password.length < 4)
-    return res.status(400).json({ error: "비밀번호는 4자 이상이어야 합니다." });
-
-  const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(username);
-  if (existing) return res.status(400).json({ error: "이미 사용 중인 아이디입니다." });
-
-  const hashed = bcrypt.hashSync(password, 10);
-  const result = db.prepare("INSERT INTO users (username, password) VALUES (?, ?)").run(username, hashed);
-
-  // 기본 문서 생성
-  db.prepare("INSERT INTO sql_documents (user_id, title, sql_code) VALUES (?, ?, ?)").run(
-    result.lastInsertRowid, "첫 번째 SQL 문서",
-    "-- 안녕하세요! SQL을 작성해보세요.\n-- 예시:\nCREATE TABLE student (\n  student_id INT PRIMARY KEY,\n  name VARCHAR(50) NOT NULL,\n  age INT\n);"
-  );
-
-  const token = jwt.sign({ id: result.lastInsertRowid, username }, JWT_SECRET, { expiresIn: "7d" });
-  res.json({ token, username });
+// Step 1: 로그인 URL 생성
+app.get("/api/auth/naver", (req, res) => {
+  const state = Math.random().toString(36).substring(2);
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id:     CONFIG.NAVER_CLIENT_ID,
+    redirect_uri:  CONFIG.NAVER_CALLBACK_URL,
+    state,
+  });
+  res.json({ url: `https://nid.naver.com/oauth2.0/authorize?${params}` });
 });
 
-// 로그인
-app.post("/api/auth/login", (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password)
-    return res.status(400).json({ error: "아이디와 비밀번호를 입력하세요." });
+// Step 2: 콜백 처리
+app.get("/api/auth/naver/callback", async (req, res) => {
+  const { code, state } = req.query;
+  if (!code) return res.redirect(`${CONFIG.FRONTEND_URL}/login?error=cancelled`);
+  try {
+    // 네이버에서 액세스 토큰 받기
+    const tokenRes = await axios.post("https://nid.naver.com/oauth2.0/token", null, {
+      params: { grant_type: "authorization_code", client_id: CONFIG.NAVER_CLIENT_ID, client_secret: CONFIG.NAVER_CLIENT_SECRET, code, state },
+    });
+    const { access_token } = tokenRes.data;
 
-  const user = db.prepare("SELECT * FROM users WHERE username = ?").get(username);
-  if (!user || !bcrypt.compareSync(password, user.password))
-    return res.status(401).json({ error: "아이디 또는 비밀번호가 올바르지 않습니다." });
+    // 사용자 프로필 받기
+    const profileRes = await axios.get("https://openapi.naver.com/v1/nid/me", {
+      headers: { Authorization: `Bearer ${access_token}` },
+    });
+    const { id: naverId, nickname, email, profile_image } = profileRes.data.response;
 
-  const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: "7d" });
-  res.json({ token, username: user.username });
+    // DB upsert
+    const existing = db.prepare("SELECT * FROM users WHERE naver_id = ?").get(naverId);
+    let userId;
+    if (existing) {
+      db.prepare("UPDATE users SET username=?, email=?, profile_image=?, updated_at=datetime('now') WHERE naver_id=?")
+        .run(nickname || "사용자", email, profile_image, naverId);
+      userId = existing.id;
+    } else {
+      const r = db.prepare("INSERT INTO users (naver_id, username, email, profile_image) VALUES (?,?,?,?)").run(naverId, nickname || "사용자", email, profile_image);
+      userId = r.lastInsertRowid;
+      db.prepare("INSERT INTO sql_documents (user_id, title, sql_code) VALUES (?,?,?)").run(userId, "첫 번째 문서",
+        "-- SQL 작성을 시작해보세요!\n\nCREATE TABLE student (\n  student_id INT PRIMARY KEY,\n  name VARCHAR(50) NOT NULL,\n  age INT\n);\n\nSELECT * FROM student;");
+    }
+
+    const token = jwt.sign({ id: userId, username: nickname || "사용자", email, profile_image }, CONFIG.JWT_SECRET, { expiresIn: "7d" });
+    res.redirect(`${CONFIG.FRONTEND_URL}/auth/callback?token=${token}`);
+  } catch (err) {
+    console.error("네이버 OAuth 오류:", err.message);
+    res.redirect(`${CONFIG.FRONTEND_URL}/login?error=oauth_failed`);
+  }
+});
+
+app.get("/api/auth/me", auth, (req, res) => {
+  const user = db.prepare("SELECT id, username, email, profile_image, created_at FROM users WHERE id=?").get(req.user.id);
+  if (!user) return res.status(404).json({ error: "사용자를 찾을 수 없습니다." });
+  res.json(user);
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// DOCUMENTS API
+// 문서 API
 // ══════════════════════════════════════════════════════════════════════════════
+app.get("/api/docs",      auth, (req, res) => res.json(db.prepare("SELECT id,title,memo,created_at,updated_at FROM sql_documents WHERE user_id=? ORDER BY updated_at DESC").all(req.user.id)));
+app.get("/api/docs/:id",  auth, (req, res) => { const d = db.prepare("SELECT * FROM sql_documents WHERE id=? AND user_id=?").get(req.params.id, req.user.id); d ? res.json(d) : res.status(404).json({ error: "문서를 찾을 수 없습니다." }); });
+app.post("/api/docs",     auth, (req, res) => { const { title="새 문서", sql_code="", memo="" } = req.body; const r = db.prepare("INSERT INTO sql_documents (user_id,title,sql_code,memo) VALUES (?,?,?,?)").run(req.user.id,title,sql_code,memo); res.status(201).json(db.prepare("SELECT * FROM sql_documents WHERE id=?").get(r.lastInsertRowid)); });
+app.put("/api/docs/:id",  auth, (req, res) => { const { title, sql_code, memo } = req.body; if (!db.prepare("SELECT id FROM sql_documents WHERE id=? AND user_id=?").get(req.params.id,req.user.id)) return res.status(404).json({error:"문서를 찾을 수 없습니다."}); db.prepare("UPDATE sql_documents SET title=COALESCE(?,title), sql_code=COALESCE(?,sql_code), memo=COALESCE(?,memo), updated_at=datetime('now') WHERE id=?").run(title,sql_code,memo,req.params.id); res.json({ok:true}); });
+app.delete("/api/docs/:id",auth,(req,res)=>{ if(!db.prepare("SELECT id FROM sql_documents WHERE id=? AND user_id=?").get(req.params.id,req.user.id)) return res.status(404).json({error:"문서를 찾을 수 없습니다."}); db.prepare("DELETE FROM sql_documents WHERE id=?").run(req.params.id); res.json({ok:true}); });
 
-// 문서 목록 조회
-app.get("/api/docs", authMiddleware, (req, res) => {
-  const docs = db.prepare(
-    "SELECT id, title, memo, updated_at, created_at FROM sql_documents WHERE user_id = ? ORDER BY updated_at DESC"
-  ).all(req.user.id);
-  res.json(docs);
-});
-
-// 문서 단건 조회
-app.get("/api/docs/:id", authMiddleware, (req, res) => {
-  const doc = db.prepare("SELECT * FROM sql_documents WHERE id = ? AND user_id = ?").get(req.params.id, req.user.id);
-  if (!doc) return res.status(404).json({ error: "문서를 찾을 수 없습니다." });
-  res.json(doc);
-});
-
-// 새 문서 생성
-app.post("/api/docs", authMiddleware, (req, res) => {
-  const { title = "제목 없음", sql_code = "", memo = "" } = req.body;
-  const result = db.prepare(
-    "INSERT INTO sql_documents (user_id, title, sql_code, memo) VALUES (?, ?, ?, ?)"
-  ).run(req.user.id, title, sql_code, memo);
-  const doc = db.prepare("SELECT * FROM sql_documents WHERE id = ?").get(result.lastInsertRowid);
-  res.json(doc);
-});
-
-// 문서 저장 (수정)
-app.put("/api/docs/:id", authMiddleware, (req, res) => {
-  const { title, sql_code, memo } = req.body;
-  const doc = db.prepare("SELECT * FROM sql_documents WHERE id = ? AND user_id = ?").get(req.params.id, req.user.id);
-  if (!doc) return res.status(404).json({ error: "문서를 찾을 수 없습니다." });
-
-  db.prepare(
-    "UPDATE sql_documents SET title = ?, sql_code = ?, memo = ?, updated_at = datetime('now') WHERE id = ?"
-  ).run(title ?? doc.title, sql_code ?? doc.sql_code, memo ?? doc.memo, req.params.id);
-
-  // 최근 활동 기록
-  db.prepare("INSERT INTO recent_activity (user_id, doc_id, action) VALUES (?, ?, ?)").run(req.user.id, req.params.id, "save");
-
+// SQL 실행 기록
+app.post("/api/history", auth, (req, res) => {
+  db.prepare("INSERT INTO sql_history (user_id, sql_code) VALUES (?,?)").run(req.user.id, req.body.sql_code);
+  db.prepare("DELETE FROM sql_history WHERE user_id=? AND id NOT IN (SELECT id FROM sql_history WHERE user_id=? ORDER BY executed_at DESC LIMIT 20)").run(req.user.id, req.user.id);
   res.json({ ok: true });
 });
+app.get("/api/history", auth, (req, res) => res.json(db.prepare("SELECT * FROM sql_history WHERE user_id=? ORDER BY executed_at DESC LIMIT 20").all(req.user.id)));
 
-// 문서 삭제
-app.delete("/api/docs/:id", authMiddleware, (req, res) => {
-  const doc = db.prepare("SELECT * FROM sql_documents WHERE id = ? AND user_id = ?").get(req.params.id, req.user.id);
-  if (!doc) return res.status(404).json({ error: "문서를 찾을 수 없습니다." });
-  db.prepare("DELETE FROM sql_documents WHERE id = ?").run(req.params.id);
-  res.json({ ok: true });
+app.listen(PORT, () => {
+  console.log(`✅ SQLVisual API: http://localhost:${PORT}`);
+  console.log(`📌 네이버 콜백 URL 등록 필요: ${CONFIG.NAVER_CALLBACK_URL}`);
 });
-
-// 최근 활동 조회
-app.get("/api/activity", authMiddleware, (req, res) => {
-  const rows = db.prepare(`
-    SELECT ra.*, sd.title FROM recent_activity ra
-    LEFT JOIN sql_documents sd ON ra.doc_id = sd.id
-    WHERE ra.user_id = ? ORDER BY ra.created_at DESC LIMIT 10
-  `).all(req.user.id);
-  res.json(rows);
-});
-
-// ── 서버 시작 ─────────────────────────────────────────────────────────────────
-app.listen(PORT, () => console.log(`✅ SQLVisual API: http://localhost:${PORT}`));
