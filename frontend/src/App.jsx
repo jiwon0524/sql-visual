@@ -3,7 +3,7 @@ import Editor from "@monaco-editor/react";
 import sqlJsUrl from "sql.js/dist/sql-wasm.js?url";
 import sqlWasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 import { analyzeError, explainDetailedSQL, parseCreateTable, splitStatements } from "./utils/sqlAnalyzer.js";
-import { api, apiBase, authStore, hasApiBase, normalizeApiBase } from "./utils/api.js";
+import { api, authStore, hasApiBase } from "./utils/api.js";
 
 const C = {
   bg: "#f6f7f9",
@@ -1352,31 +1352,6 @@ function ConstraintVisual({ loadExample }) {
 function LoginPage({ onLogin, authMessage }) {
   const [message, setMessage] = useState(authMessage || "");
   const [apiStatus, setApiStatus] = useState(hasApiBase() ? "checking" : "not-configured");
-  const [apiInput, setApiInput] = useState(apiBase || "");
-  const reloadLogin = () => {
-    window.location.href = new URL(import.meta.env.BASE_URL || "/", window.location.origin).toString();
-  };
-  const useLocalBackend = () => {
-    localStorage.setItem("sv_api_base", "http://localhost:3001/api");
-    reloadLogin();
-  };
-  const saveApiBase = () => {
-    const value = normalizeApiBase(apiInput);
-    if (!value) {
-      setMessage("배포된 백엔드 API 주소를 입력하세요. 예: https://your-api.example.com/api");
-      return;
-    }
-    if (!/^https?:\/\//.test(value)) {
-      setMessage("API 주소는 http:// 또는 https://로 시작해야 합니다.");
-      return;
-    }
-    localStorage.setItem("sv_api_base", value);
-    reloadLogin();
-  };
-  const clearApiBase = () => {
-    localStorage.removeItem("sv_api_base");
-    reloadLogin();
-  };
 
   useEffect(() => {
     setMessage(authMessage || "");
@@ -1391,24 +1366,24 @@ function LoginPage({ onLogin, authMessage }) {
     return () => { alive = false; };
   }, []);
 
-  const naverLogin = async ({ switchAccount = false } = {}) => {
+  const naverLogin = async () => {
     if (!hasApiBase()) {
-      setMessage("네이버 로그인에는 공개 백엔드 API 주소가 필요합니다. 다른 컴퓨터에서도 쓰려면 localhost가 아니라 배포된 백엔드 주소를 연결해야 합니다.");
+      setMessage("백엔드 API 연결이 필요합니다.");
       return;
     }
     if (apiStatus === "offline" || apiStatus === "checking") {
-      setMessage("백엔드 서버에 연결할 수 없습니다. 다른 컴퓨터에서 쓰려면 공개 배포된 백엔드 API 주소가 필요합니다.");
+      setMessage("백엔드 서버에 연결할 수 없습니다.");
       return;
     }
     if (apiStatus === "missing-oauth") {
-      setMessage("백엔드는 켜져 있지만 NAVER_CLIENT_ID와 NAVER_CLIENT_SECRET이 설정되지 않았습니다.");
+      setMessage("네이버 로그인 설정이 필요합니다.");
       return;
     }
     try {
       const returnTo = new URL(import.meta.env.BASE_URL || "/", window.location.origin).toString();
       const { url } = await api.naverLoginUrl({
         returnTo,
-        authType: switchAccount ? "reauthenticate" : undefined,
+        authType: "reauthenticate",
       });
       window.location.href = url;
     } catch (err) {
@@ -1419,40 +1394,9 @@ function LoginPage({ onLogin, authMessage }) {
   return (
     <main style={{ maxWidth: 420, margin: "60px auto", padding: 20 }}>
       <Panel title="로그인">
-        <p style={{ margin: "0 0 14px", color: C.sub, fontSize: 13, lineHeight: 1.6 }}>로그인하면 문서 저장과 최근 작업 관리 기능을 서버 계정과 연결할 수 있습니다.</p>
-        <div style={{ marginBottom: 12, border: `1px solid ${C.lineSoft}`, background: C.panelAlt, borderRadius: 8, padding: 11, display: "grid", gap: 6 }}>
-          <span style={{ fontSize: 12, color: C.text, fontWeight: 700 }}>API 연결 상태</span>
-          <span style={{ fontSize: 12, color: apiStatus === "online" ? C.success : apiStatus === "checking" ? C.warn : C.danger, fontFamily: C.mono }}>
-            {apiStatus === "online" && `online · ${apiBase}`}
-            {apiStatus === "checking" && `checking · ${apiBase}`}
-            {apiStatus === "offline" && `offline · ${apiBase}`}
-            {apiStatus === "missing-oauth" && "backend online · naver env missing"}
-            {apiStatus === "not-configured" && "not configured · API 주소 필요"}
-          </span>
-        </div>
-        {apiStatus !== "online" && (
-          <div style={{ marginBottom: 8, border: `1px solid ${C.lineSoft}`, borderRadius: 8, padding: 11, background: C.panel, display: "grid", gap: 8 }}>
-            <label style={{ fontSize: 12, color: C.text, fontWeight: 700 }}>공개 백엔드 API 주소</label>
-            <input
-              value={apiInput}
-              onChange={event => setApiInput(event.target.value)}
-              onKeyDown={event => { if (event.key === "Enter") saveApiBase(); }}
-              placeholder="https://your-sqlvisual-api.example.com/api"
-              style={{ height: 32, border: `1px solid ${C.line}`, borderRadius: 7, padding: "0 10px", fontSize: 12, outline: "none" }}
-            />
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <Button onClick={saveApiBase}>API 주소 저장</Button>
-              <Button onClick={clearApiBase}>설정 초기화</Button>
-              <Button onClick={useLocalBackend}>이 컴퓨터 로컬 백엔드</Button>
-            </div>
-            <p style={{ margin: 0, color: C.muted, fontSize: 11, lineHeight: 1.5 }}>다른 컴퓨터에서도 로그인하려면 localhost가 아니라 Render/Railway 같은 곳에 배포한 백엔드 주소를 입력해야 합니다.</p>
-          </div>
-        )}
-        <Button variant="primary" onClick={() => naverLogin()} disabled={apiStatus !== "online"} style={{ width: "100%" }}>네이버 OAuth 로그인</Button>
-        <Button onClick={() => naverLogin({ switchAccount: true })} disabled={apiStatus !== "online"} style={{ width: "100%", marginTop: 8 }}>다른 네이버 아이디로 로그인</Button>
+        <Button variant="primary" onClick={naverLogin} disabled={apiStatus !== "online"} style={{ width: "100%" }}>네이버 로그인</Button>
         <Button onClick={() => onLogin({ username: "체험 사용자" })} style={{ width: "100%", marginTop: 8 }}>체험 모드로 계속</Button>
-        <p style={{ margin: "12px 0 0", color: C.muted, fontSize: 12, lineHeight: 1.55 }}>GitHub Pages는 정적 호스팅이라 자체적으로 OAuth 콜백과 문서 저장 API를 처리할 수 없습니다. 공개 Node 백엔드를 배포한 뒤 그 API 주소를 연결해야 다른 컴퓨터에서도 네이버 로그인이 됩니다.</p>
-        {message && <p style={{ color: C.warn, fontSize: 12, lineHeight: 1.5 }}>{message}</p>}
+        {message && <p style={{ margin: "12px 0 0", color: C.warn, fontSize: 12, lineHeight: 1.5 }}>{message}</p>}
       </Panel>
     </main>
   );
