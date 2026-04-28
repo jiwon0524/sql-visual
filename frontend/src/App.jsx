@@ -1352,6 +1352,10 @@ function ConstraintVisual({ loadExample }) {
 function LoginPage({ onLogin, authMessage }) {
   const [message, setMessage] = useState(authMessage || "");
   const [apiStatus, setApiStatus] = useState(hasApiBase() ? "checking" : "not-configured");
+  const useLocalBackend = () => {
+    localStorage.setItem("sv_api_base", "http://localhost:3001/api");
+    window.location.href = new URL(import.meta.env.BASE_URL || "/", window.location.origin).toString();
+  };
 
   useEffect(() => {
     setMessage(authMessage || "");
@@ -1368,7 +1372,7 @@ function LoginPage({ onLogin, authMessage }) {
 
   const naverLogin = async () => {
     if (!hasApiBase()) {
-      setMessage("네이버 로그인에는 백엔드 API 주소가 필요합니다. GitHub Pages 배포에서는 VITE_API_BASE_URL을 배포된 백엔드 주소로 설정해야 합니다.");
+      setMessage("네이버 로그인에는 백엔드 API 주소가 필요합니다. 로컬 테스트라면 아래의 로컬 백엔드 연결 버튼을 먼저 누르세요.");
       return;
     }
     if (apiStatus === "offline" || apiStatus === "checking") {
@@ -1402,6 +1406,9 @@ function LoginPage({ onLogin, authMessage }) {
             {apiStatus === "not-configured" && "not configured · VITE_API_BASE_URL 필요"}
           </span>
         </div>
+        {apiStatus === "not-configured" && (
+          <Button onClick={useLocalBackend} style={{ width: "100%", marginBottom: 8 }}>로컬 백엔드 연결</Button>
+        )}
         <Button variant="primary" onClick={naverLogin} disabled={apiStatus !== "online"} style={{ width: "100%" }}>네이버 OAuth 로그인</Button>
         <Button onClick={() => onLogin({ username: "체험 사용자" })} style={{ width: "100%", marginTop: 8 }}>체험 모드로 계속</Button>
         <p style={{ margin: "12px 0 0", color: C.muted, fontSize: 12, lineHeight: 1.55 }}>GitHub Pages는 정적 호스팅이라 자체적으로 OAuth 콜백과 문서 저장 API를 처리할 수 없습니다. 배포된 Node 백엔드 주소를 프론트 환경변수에 연결하면 네이버 로그인이 활성화됩니다.</p>

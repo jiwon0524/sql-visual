@@ -1,5 +1,19 @@
-const DEFAULT_BASE = import.meta.env.DEV ? "http://localhost:3001/api" : "";
-const BASE = (import.meta.env.VITE_API_BASE_URL || DEFAULT_BASE).replace(/\/$/, "");
+function localApiBase() {
+  if (typeof window === "undefined") return "";
+  const host = window.location.hostname;
+  return host === "localhost" || host === "127.0.0.1" ? "http://localhost:3001/api" : "";
+}
+
+function runtimeApiBase() {
+  if (typeof window === "undefined") return "";
+  const params = new URLSearchParams(window.location.search);
+  const fromUrl = params.get("api");
+  if (fromUrl) localStorage.setItem("sv_api_base", fromUrl);
+  return localStorage.getItem("sv_api_base") || "";
+}
+
+const DEFAULT_BASE = import.meta.env.DEV ? "http://localhost:3001/api" : localApiBase();
+const BASE = (import.meta.env.VITE_API_BASE_URL || runtimeApiBase() || DEFAULT_BASE).replace(/\/$/, "");
 
 export const apiBase = BASE;
 
@@ -21,7 +35,7 @@ function decodeJwtPayload(jwt) {
 
 async function req(method, path, body = null) {
   if (!BASE) {
-    throw new Error("백엔드 API 주소가 설정되어 있지 않습니다. VITE_API_BASE_URL을 설정하거나 체험 모드를 사용하세요.");
+    throw new Error("백엔드 API 주소가 설정되어 있지 않습니다. 로컬 백엔드 연결을 먼저 설정하세요.");
   }
 
   const headers = { "Content-Type": "application/json" };
