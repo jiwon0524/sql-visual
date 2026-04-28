@@ -1391,7 +1391,7 @@ function LoginPage({ onLogin, authMessage }) {
     return () => { alive = false; };
   }, []);
 
-  const naverLogin = async () => {
+  const naverLogin = async ({ switchAccount = false } = {}) => {
     if (!hasApiBase()) {
       setMessage("네이버 로그인에는 공개 백엔드 API 주소가 필요합니다. 다른 컴퓨터에서도 쓰려면 localhost가 아니라 배포된 백엔드 주소를 연결해야 합니다.");
       return;
@@ -1406,7 +1406,10 @@ function LoginPage({ onLogin, authMessage }) {
     }
     try {
       const returnTo = new URL(import.meta.env.BASE_URL || "/", window.location.origin).toString();
-      const { url } = await api.naverLoginUrl(returnTo);
+      const { url } = await api.naverLoginUrl({
+        returnTo,
+        authType: switchAccount ? "reauthenticate" : undefined,
+      });
       window.location.href = url;
     } catch (err) {
       setMessage(err.message);
@@ -1445,7 +1448,8 @@ function LoginPage({ onLogin, authMessage }) {
             <p style={{ margin: 0, color: C.muted, fontSize: 11, lineHeight: 1.5 }}>다른 컴퓨터에서도 로그인하려면 localhost가 아니라 Render/Railway 같은 곳에 배포한 백엔드 주소를 입력해야 합니다.</p>
           </div>
         )}
-        <Button variant="primary" onClick={naverLogin} disabled={apiStatus !== "online"} style={{ width: "100%" }}>네이버 OAuth 로그인</Button>
+        <Button variant="primary" onClick={() => naverLogin()} disabled={apiStatus !== "online"} style={{ width: "100%" }}>네이버 OAuth 로그인</Button>
+        <Button onClick={() => naverLogin({ switchAccount: true })} disabled={apiStatus !== "online"} style={{ width: "100%", marginTop: 8 }}>다른 네이버 아이디로 로그인</Button>
         <Button onClick={() => onLogin({ username: "체험 사용자" })} style={{ width: "100%", marginTop: 8 }}>체험 모드로 계속</Button>
         <p style={{ margin: "12px 0 0", color: C.muted, fontSize: 12, lineHeight: 1.55 }}>GitHub Pages는 정적 호스팅이라 자체적으로 OAuth 콜백과 문서 저장 API를 처리할 수 없습니다. 공개 Node 백엔드를 배포한 뒤 그 API 주소를 연결해야 다른 컴퓨터에서도 네이버 로그인이 됩니다.</p>
         {message && <p style={{ color: C.warn, fontSize: 12, lineHeight: 1.5 }}>{message}</p>}

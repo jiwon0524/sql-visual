@@ -80,7 +80,12 @@ async function req(method, path, body = null) {
 
 export const api = {
   health: () => req("GET", "/health"),
-  naverLoginUrl: returnTo => req("GET", `/auth/naver${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`),
+  naverLoginUrl: ({ returnTo, authType } = {}) => {
+    const params = new URLSearchParams();
+    if (returnTo) params.set("returnTo", returnTo);
+    if (authType) params.set("authType", authType);
+    return req("GET", `/auth/naver${params.toString() ? `?${params}` : ""}`);
+  },
   me: () => req("GET", "/auth/me"),
   getDocs: () => req("GET", "/docs"),
   getDoc: id => req("GET", `/docs/${id}`),

@@ -35,6 +35,10 @@ In the Naver Developers app settings, add:
 - Service URL: `https://jiwon0524.github.io`
 - Callback URL: `https://your-backend.example.com/api/auth/naver/callback`
 
+The Naver app key is the service key for SQLVisual. Users do not share your Naver account. When they click Naver login, Naver authenticates their own Naver account and the backend stores a separate SQLVisual user by that account's `naver_id`.
+
+For a public service, make sure the Naver Developers app is configured for real users, not only local development testers. If Naver requires review for your selected profile permissions, complete the Naver Login review/service application before inviting other users.
+
 For local testing on this computer, you can also keep:
 
 - Service URL: `http://127.0.0.1:5174`
@@ -78,3 +82,10 @@ npm run dev:host
 ```
 
 Then open the shown network URL from the other device. OAuth login still needs a backend URL and Naver callback URL that are reachable from that device, so a public backend is the clean path for real login.
+
+## Account Switching
+
+The frontend has two login buttons:
+
+- `네이버 OAuth 로그인`: continues with the Naver account already signed in to the browser when possible.
+- `다른 네이버 아이디로 로그인`: asks Naver to reauthenticate so a different person can choose their own Naver ID on a shared browser.

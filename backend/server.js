@@ -123,13 +123,16 @@ app.get("/api/auth/naver", (req, res) => {
 
   const returnTo = safeReturnTo(req.query.returnTo);
   const state = encodeState(returnTo);
-  const params = new URLSearchParams({
+  const params = {
     response_type: "code",
     client_id: CONFIG.NAVER_CLIENT_ID,
     redirect_uri: CONFIG.NAVER_CALLBACK_URL,
     state,
-  });
-  res.json({ url: `https://nid.naver.com/oauth2.0/authorize?${params}` });
+  };
+  if (req.query.authType === "reauthenticate") {
+    params.auth_type = "reauthenticate";
+  }
+  res.json({ url: `https://nid.naver.com/oauth2.0/authorize?${new URLSearchParams(params)}` });
 });
 
 app.get("/api/auth/naver/callback", async (req, res) => {
