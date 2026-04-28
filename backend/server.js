@@ -2,6 +2,7 @@
 // SQLVisual Backend — server.js
 // Node.js + Express + SQLite + 네이버 OAuth 2.0
 // ══════════════════════════════════════════════════════════════════════════════
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import jwt from "jsonwebtoken";
@@ -12,7 +13,7 @@ import { dirname, join } from "path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app  = express();
-const PORT = 3001;
+const PORT = Number(process.env.PORT || 3001);
 
 // ── 환경변수 ──────────────────────────────────────────────────────────────────
 // 실제 배포 시 .env 파일에 넣고 dotenv로 불러오세요
@@ -22,10 +23,31 @@ const CONFIG = {
   NAVER_CLIENT_SECRET: process.env.NAVER_CLIENT_SECRET || "YOUR_NAVER_CLIENT_SECRET",
   NAVER_CALLBACK_URL:  process.env.NAVER_CALLBACK_URL  || "http://localhost:3001/api/auth/naver/callback",
   FRONTEND_URL:        process.env.FRONTEND_URL        || "http://localhost:5173",
+  CORS_ORIGINS:        process.env.CORS_ORIGINS        || process.env.FRONTEND_URL || "http://localhost:5173",
 };
 
+const allowedOrigins = CONFIG.CORS_ORIGINS
+  .split(",")
+  .map(origin => origin.trim())
+  .filter(Boolean);
+
+function requireConfig(name, value) {
+  if (!value || value.startsWith("YOUR_")) {
+    console.warn(`⚠️  ${name} 환경변수를 설정해야 해당 기능이 정상 동작합니다.`);
+  }
+}
+
+requireConfig("NAVER_CLIENT_ID", CONFIG.NAVER_CLIENT_ID);
+requireConfig("NAVER_CLIENT_SECRET", CONFIG.NAVER_CLIENT_SECRET);
+
 // ── 미들웨어 ──────────────────────────────────────────────────────────────────
-app.use(cors({ origin: CONFIG.FRONTEND_URL, credentials: true }));
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error(`CORS 차단: ${origin}`));
+  },
+  credentials: true,
+}));
 app.use(express.json());
 
 // ── SQLite DB ─────────────────────────────────────────────────────────────────
@@ -122,6 +144,10 @@ app.get("/api/auth/naver/callback", async (req, res) => {
     console.error("네이버 OAuth 오류:", err.message);
     res.redirect(`${CONFIG.FRONTEND_URL}/login?error=oauth_failed`);
   }
+});
+
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true, service: "SQLVisual API" });
 });
 
 app.get("/api/auth/me", auth, (req, res) => {

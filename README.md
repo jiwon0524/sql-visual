@@ -1,65 +1,116 @@
 # SQLVisual v2 — SQL 학습 플랫폼
 
-SQL을 직접 작성하고, 자동 해설을 받고, 테이블 구조를 시각화하고, 개념을 학습하는 풀스택 웹앱입니다.
+SQL을 직접 작성하고, 자동 해설을 받고, 테이블 구조를 시각화하고, 개념을 학습하는 웹앱입니다.
+
+## 먼저 알아둘 점
+
+- GitHub Pages는 정적 프론트엔드만 호스팅합니다.
+- `https://jiwon0524.github.io/sql-visual/`에서는 SQL 실행, 해설, 시각화, 로컬 문서 저장을 체험할 수 있습니다.
+- 네이버 로그인과 서버 DB 문서 저장을 쓰려면 `backend`를 로컬 또는 Render/Railway/Fly.io 같은 별도 서버에서 실행해야 합니다.
+- 로컬 미리보기 주소는 프론트엔드 `http://localhost:5173`입니다.
+- `http://localhost:3001`은 백엔드 API 주소라서 브라우저 화면 대신 `http://localhost:3001/api/health` 같은 API 응답을 확인하는 용도입니다.
 
 ## 폴더 구조
 
-```
+```text
 sqlvisual2/
 ├── frontend/
 │   ├── src/
-│   │   ├── App.jsx              ← 전체 앱 (홈/편집기/시각화/개념/마이페이지)
+│   │   ├── App.jsx
 │   │   ├── main.jsx
 │   │   └── utils/
-│   │       ├── sqlAnalyzer.js   ← SQL 해설 + 에러 분석
-│   │       └── api.js           ← 백엔드 API 호출
-│   ├── index.html               ← Noto Sans KR + JetBrains Mono
+│   │       ├── sqlAnalyzer.js
+│   │       └── api.js
+│   ├── index.html
 │   ├── vite.config.js
-│   └── package.json
+│   ├── package.json
+│   └── .env.example
 │
 └── backend/
-    ├── server.js                ← Express + 네이버 OAuth + SQLite
-    └── package.json
+    ├── server.js
+    ├── package.json
+    └── .env.example
 ```
 
-## DB 스키마
+## 실행 방법
 
-```sql
--- 사용자 (네이버 OAuth)
-CREATE TABLE users (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  naver_id      TEXT UNIQUE,           -- 네이버 고유 ID
-  username      TEXT NOT NULL,         -- 네이버 닉네임
-  email         TEXT,
-  profile_image TEXT,
-  created_at    TEXT DEFAULT (datetime('now'))
-);
+### 프론트엔드만 실행
 
--- SQL 문서
-CREATE TABLE sql_documents (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id    INTEGER NOT NULL,
-  title      TEXT DEFAULT '제목 없음',
-  sql_code   TEXT DEFAULT '',
-  memo       TEXT DEFAULT '',
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now')),
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
+백엔드 없이 SQL 실행, 해설, 시각화, 로컬 문서 저장을 체험합니다.
 
--- SQL 실행 기록
-CREATE TABLE sql_history (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id     INTEGER NOT NULL,
-  sql_code    TEXT,
-  executed_at TEXT DEFAULT (datetime('now'))
-);
+```bash
+cd frontend
+npm install
+npm run dev
+# http://localhost:5173
+```
+
+### 백엔드 API 실행
+
+```bash
+cd backend
+npm install
+cp .env.example .env
+npm run dev
+# API: http://localhost:3001
+# 상태 확인: http://localhost:3001/api/health
+```
+
+Windows PowerShell에서는 `cp` 대신 아래 명령을 사용할 수 있습니다.
+
+```powershell
+Copy-Item .env.example .env
+```
+
+### 프론트엔드와 백엔드 함께 실행
+
+터미널 1:
+
+```bash
+cd backend
+npm install
+cp .env.example .env
+npm run dev
+```
+
+터미널 2:
+
+```bash
+cd frontend
+npm install
+cp .env.example .env
+npm run dev
+```
+
+프론트엔드는 `.env`의 `VITE_API_BASE_URL=http://localhost:3001/api` 값을 사용해 백엔드에 연결합니다.
+
+## 네이버 로그인 설정
+
+1. https://developers.naver.com 접속
+2. 애플리케이션 등록
+3. 사용 API: 네아로(네이버 아이디로 로그인)
+4. 제공 정보: 닉네임, 이메일, 프로필 사진
+5. 개발용 서비스 URL: `http://localhost:5173`
+6. 개발용 콜백 URL: `http://localhost:3001/api/auth/naver/callback`
+7. 배포 시 콜백 URL은 배포된 백엔드 주소로 추가 등록합니다. 예: `https://your-api.example.com/api/auth/naver/callback`
+
+백엔드 `.env` 예시:
+
+```env
+PORT=3001
+NAVER_CLIENT_ID=발급받은_클라이언트_ID
+NAVER_CLIENT_SECRET=발급받은_시크릿
+NAVER_CALLBACK_URL=http://localhost:3001/api/auth/naver/callback
+FRONTEND_URL=http://localhost:5173
+CORS_ORIGINS=http://localhost:5173,https://jiwon0524.github.io
+JWT_SECRET=랜덤한_긴_비밀키
 ```
 
 ## API 설계
 
 | Method | Path | 설명 |
 |--------|------|------|
+| GET | /api/health | 백엔드 상태 확인 |
 | GET | /api/auth/naver | 네이버 로그인 URL 반환 |
 | GET | /api/auth/naver/callback | 네이버 OAuth 콜백 처리 |
 | GET | /api/auth/me | 현재 사용자 정보 |
@@ -71,76 +122,11 @@ CREATE TABLE sql_history (
 | POST | /api/history | SQL 실행 기록 저장 |
 | GET | /api/history | 실행 기록 조회 |
 
-## 네이버 로그인 설정 방법
-
-### 1. 네이버 개발자 센터 등록
-
-1. https://developers.naver.com 접속
-2. 애플리케이션 등록 클릭
-3. 애플리케이션 이름: `SQLVisual`
-4. 사용 API: **네아로(네이버 아이디로 로그인)** 선택
-5. 제공 정보: 닉네임, 이메일, 프로필 사진 선택
-6. 서비스 URL: `http://localhost:5173` (개발용)
-7. **콜백 URL**: `http://localhost:3001/api/auth/naver/callback` ← 반드시 등록!
-
-### 2. 환경변수 설정
-
-```bash
-# backend/.env 파일 생성
-NAVER_CLIENT_ID=발급받은_클라이언트_ID
-NAVER_CLIENT_SECRET=발급받은_시크릿
-NAVER_CALLBACK_URL=http://localhost:3001/api/auth/naver/callback
-FRONTEND_URL=http://localhost:5173
-JWT_SECRET=랜덤한_비밀키_문자열
-```
-
-## 실행 방법
-
-### 프론트엔드만 (백엔드 없이 체험)
+## GitHub Pages 배포
 
 ```bash
 cd frontend
-npm install
-npm run dev
-# → http://localhost:5173
-```
-
-> 로그인/저장 없이 SQL 실행, 자동 해설, 시각화, 개념 학습 모두 가능!
-
-### 전체 실행 (로그인/저장 포함)
-
-```bash
-# 터미널 1: 백엔드
-cd backend
-npm install
-npm run dev   # nodemon 사용
-# → http://localhost:3001
-
-# 터미널 2: 프론트엔드  
-cd frontend
-npm install
-npm run dev
-# → http://localhost:5173
-```
-
-### GitHub Pages 배포
-
-```bash
-cd frontend
-# vite.config.js의 base: "/sql-visual/" 확인
-# package.json의 homepage를 본인 주소로 수정
 npm run deploy
 ```
 
-## 주요 기능
-
-| 기능 | 설명 |
-|------|------|
-| 🏠 홈 | 2단 히어로, 기능 소개, CTA |
-| ✏️ SQL 편집기 | 줄번호, Ctrl+Enter 실행, 자동 해설 |
-| 🗂 테이블 시각화 | CREATE TABLE → 다이어그램, FK 관계선 |
-| 📖 개념 학습 | 11개 개념, Java API 스타일 사이드바 |
-| 💾 문서 저장 | 로그인 후 클라우드 저장/불러오기 |
-| 🔐 네이버 로그인 | OAuth 2.0, 프로필 이미지 표시 |
-| 👤 마이페이지 | 문서 관리, 이름 수정, 삭제 |
-| ❌ 에러 분석 | 오타/괄호/쉼표 누락 등 친절한 설명 |
+GitHub Pages는 정적 호스팅이므로 백엔드 서버를 자동으로 실행하지 않습니다. 로그인/클라우드 저장까지 배포하려면 백엔드를 별도 서비스에 배포하고, 프론트엔드 빌드 환경에 `VITE_API_BASE_URL=https://배포된-api주소/api`를 설정해야 합니다.
