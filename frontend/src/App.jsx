@@ -1,1461 +1,1447 @@
-// ══════════════════════════════════════════════════════════════════════════════
-// SQLVisual — App.jsx
-// 완전 반응형 | 탭 기반 결과 UI | 미니멀 SaaS 디자인
-// 모바일 / 태블릿 / 데스크톱 모두 대응
-// ══════════════════════════════════════════════════════════════════════════════
-import { useState, useEffect, useRef, useCallback } from "react";
-import { explainSQL, analyzeError, parseCreateTable, splitStatements } from "./utils/sqlAnalyzer.js";
-import initSqlJs from "sql.js";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Editor from "@monaco-editor/react";
+import sqlJsUrl from "sql.js/dist/sql-wasm.js?url";
+import sqlWasmUrl from "sql.js/dist/sql-wasm.wasm?url";
+import { analyzeError, explainDetailedSQL, parseCreateTable, splitStatements } from "./utils/sqlAnalyzer.js";
+import { api, apiBase, authStore, hasApiBase } from "./utils/api.js";
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 디자인 토큰 — 블루 단일 강조, 미니멀
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const C = {
-  sans:      `-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', 'Apple SD Gothic Neo', sans-serif`,
-  mono:      `'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace`,
-  bg:        "#f9fafb",
-  surface:   "#ffffff",
-  surfaceAlt:"#f3f4f6",
-  border:    "#e5e7eb",
-  borderDk:  "#d1d5db",
-  text:      "#111827",
-  textSub:   "#4b5563",
-  muted:     "#9ca3af",
-  accent:    "#2563eb",
-  accentDk:  "#1d4ed8",
-  accentBg:  "#eff6ff",
-  accentBdr: "#bfdbfe",
-  green:     "#16a34a",
-  greenBg:   "#f0fdf4",
-  greenBdr:  "#bbf7d0",
-  red:       "#dc2626",
-  redBg:     "#fef2f2",
-  redBdr:    "#fecaca",
-  yellow:    "#d97706",
-  yellowBg:  "#fffbeb",
-  yellowBdr: "#fde68a",
-  edBg:      "#0f172a",
-  edGutter:  "#1e293b",
-  edText:    "#e2e8f0",
-  edMuted:   "#475569",
-  edGreen:   "#86efac",
-  edBlue:    "#93c5fd",
+  bg: "#f6f7f9",
+  panel: "#ffffff",
+  panelAlt: "#f9fafb",
+  line: "#dfe3ea",
+  lineSoft: "#edf0f4",
+  text: "#111827",
+  sub: "#5d6675",
+  muted: "#8b95a5",
+  accent: "#2563eb",
+  accentSoft: "#eff6ff",
+  danger: "#dc2626",
+  success: "#15803d",
+  warn: "#b45309",
+  dark: "#0f172a",
+  dark2: "#111827",
+  darkLine: "#263244",
+  mono: "'JetBrains Mono','SFMono-Regular',Consolas,monospace",
+  sans: "-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans KR',sans-serif",
 };
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 반응형 훅 — 창 크기 감지
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function useBp() {
-  const [w, setW] = useState(() => typeof window !== "undefined" ? window.innerWidth : 1280);
-  useEffect(() => {
-    const fn = () => setW(window.innerWidth);
-    window.addEventListener("resize", fn);
-    return () => window.removeEventListener("resize", fn);
-  }, []);
-  return {
-    isMobile:  w < 640,
-    isTablet:  w >= 640 && w < 1024,
-    isDesktop: w >= 1024,
-    w,
-  };
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 공통 UI 컴포넌트
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-// 버튼
-function Btn({ children, onClick, v = "default", sz = "md", disabled, full, title, style: sx = {} }) {
-  const [hov, setHov] = useState(false);
-  const sizes = {
-    sm:   { fontSize: 12, padding: "4px 10px",  borderRadius: 6 },
-    md:   { fontSize: 13, padding: "6px 14px",  borderRadius: 7 },
-    lg:   { fontSize: 15, padding: "10px 22px", borderRadius: 9 },
-    icon: { fontSize: 14, padding: "5px 8px",   borderRadius: 7 },
-  };
-  const variants = {
-    primary: { background: hov ? C.accentDk : C.accent,       color: "#fff",      border: "none",                      boxShadow: hov ? `0 4px 12px ${C.accent}44` : "none" },
-    default: { background: hov ? C.surfaceAlt : C.surface,    color: C.textSub,   border: `1px solid ${C.border}` },
-    ghost:   { background: hov ? C.surfaceAlt : "transparent", color: C.textSub,   border: "none" },
-    danger:  { background: hov ? "#fee2e2" : C.redBg,          color: C.red,       border: `1px solid ${C.redBdr}` },
-    success: { background: hov ? "#dcfce7" : C.greenBg,        color: C.green,     border: `1px solid ${C.greenBdr}` },
-  };
-  const s  = sizes[sz]  || sizes.md;
-  const vv = variants[v] || variants.default;
-  return (
-    <button
-      title={title}
-      disabled={disabled}
-      onClick={onClick}
-      onMouseEnter={() => setHov(true)}
-      onMouseLeave={() => setHov(false)}
-      style={{
-        display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5,
-        fontFamily: C.sans, fontWeight: 500, cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.5 : 1, transition: "all .15s", width: full ? "100%" : "auto",
-        whiteSpace: "nowrap", ...s, ...vv, ...sx,
-      }}
-    >{children}</button>
-  );
-}
-
-// 모달
-function Modal({ open, onClose, title, children, wide }) {
-  if (!open) return null;
-  return (
-    <div
-      onClick={onClose}
-      style={{
-        position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 1000,
-        display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
-        backdropFilter: "blur(2px)",
-      }}
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          background: C.surface, borderRadius: 12, padding: "22px 22px 18px",
-          width: "100%", maxWidth: wide ? 880 : 480, maxHeight: "90vh", overflow: "auto",
-          boxShadow: "0 20px 60px rgba(0,0,0,.18)",
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <span style={{ fontWeight: 700, fontSize: 15, color: C.text, fontFamily: C.sans }}>{title}</span>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: C.muted, lineHeight: 1, padding: 4 }}>×</button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 상단 네비게이션 — 반응형
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const NAV_ITEMS = [
-  { id: "home",       label: "홈",      icon: "⌂"  },
-  { id: "editor",     label: "SQL 작성", icon: "✏"  },
-  { id: "visualizer", label: "시각화",  icon: "⊞"  },
-  { id: "concepts",   label: "개념",    icon: "📖" },
-  { id: "docs",       label: "문서",    icon: "📁" },
-];
-
-function NavBar({ page, setPage, user, onLogout, bp }) {
-  const [menuOpen, setMenuOpen] = useState(false);
-
-  // 페이지 변경 시 모바일 메뉴 닫기
-  useEffect(() => setMenuOpen(false), [page]);
-
-  return (
-    <>
-      <header style={{
-        position: "sticky", top: 0, zIndex: 100,
-        background: C.surface, borderBottom: `1px solid ${C.border}`,
-        height: 50,
-      }}>
-        <div style={{
-          maxWidth: 1280, margin: "0 auto", padding: "0 14px",
-          height: "100%", display: "flex", alignItems: "center", gap: 8,
-        }}>
-          {/* 로고 */}
-          <button
-            onClick={() => setPage("home")}
-            style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 8, padding: "0 4px", flexShrink: 0 }}
-          >
-            <div style={{
-              width: 27, height: 27, borderRadius: 7, background: C.accent,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              color: "#fff", fontSize: 11, fontWeight: 800, fontFamily: C.mono, letterSpacing: -0.5,
-            }}>SV</div>
-            {!bp.isMobile && (
-              <span style={{ fontWeight: 700, fontSize: 15, color: C.text, fontFamily: C.sans }}>
-                SQL<span style={{ color: C.accent }}>Visual</span>
-              </span>
-            )}
-          </button>
-
-          {/* 데스크톱 / 태블릿 네비 */}
-          {!bp.isMobile && (
-            <nav style={{ display: "flex", gap: 1, marginLeft: 8 }}>
-              {NAV_ITEMS.map(n => {
-                const active = page === n.id;
-                return (
-                  <button
-                    key={n.id}
-                    onClick={() => setPage(n.id)}
-                    style={{
-                      padding: bp.isTablet ? "6px 9px" : "6px 13px",
-                      borderRadius: 7, border: "none", cursor: "pointer",
-                      background: active ? C.accentBg : "transparent",
-                      color: active ? C.accent : C.textSub,
-                      fontWeight: active ? 600 : 400,
-                      fontSize: 13, fontFamily: C.sans, transition: "all .14s",
-                      display: "flex", alignItems: "center", gap: 4,
-                      borderBottom: active ? `2px solid ${C.accent}` : "2px solid transparent",
-                    }}
-                  >
-                    {bp.isTablet ? (
-                      <><span style={{ fontSize: 13 }}>{n.icon}</span><span style={{ fontSize: 12 }}>{n.label}</span></>
-                    ) : n.label}
-                  </button>
-                );
-              })}
-            </nav>
-          )}
-
-          <div style={{ flex: 1 }} />
-
-          {/* 우측 유저 영역 */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {user ? (
-              <>
-                {!bp.isMobile && (
-                  <span style={{ fontSize: 13, color: C.textSub, fontFamily: C.sans, maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {user.username}
-                  </span>
-                )}
-                <Btn onClick={onLogout} sz="sm" v="ghost">로그아웃</Btn>
-              </>
-            ) : (
-              <Btn onClick={() => setPage("login")} sz="sm" v="primary">로그인</Btn>
-            )}
-
-            {/* 모바일 햄버거 */}
-            {bp.isMobile && (
-              <button
-                onClick={() => setMenuOpen(o => !o)}
-                style={{ background: "none", border: "none", cursor: "pointer", padding: 6, fontSize: 18, color: C.text, display: "flex", alignItems: "center" }}
-                aria-label="메뉴"
-              >
-                {menuOpen ? "✕" : "☰"}
-              </button>
-            )}
-          </div>
-        </div>
-      </header>
-
-      {/* 모바일 드롭다운 메뉴 */}
-      {bp.isMobile && menuOpen && (
-        <div style={{
-          position: "fixed", top: 50, left: 0, right: 0, zIndex: 99,
-          background: C.surface, borderBottom: `1px solid ${C.border}`,
-          boxShadow: "0 8px 24px rgba(0,0,0,.1)",
-        }}>
-          {NAV_ITEMS.map(n => {
-            const active = page === n.id;
-            return (
-              <button
-                key={n.id}
-                onClick={() => setPage(n.id)}
-                style={{
-                  display: "flex", alignItems: "center", gap: 12, width: "100%",
-                  padding: "13px 20px", border: "none",
-                  background: active ? C.accentBg : "transparent",
-                  color: active ? C.accent : C.text,
-                  fontSize: 15, fontFamily: C.sans, fontWeight: active ? 600 : 400,
-                  cursor: "pointer", borderLeft: active ? `3px solid ${C.accent}` : "3px solid transparent",
-                }}
-              >
-                <span style={{ width: 20, textAlign: "center" }}>{n.icon}</span>
-                {n.label}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </>
-  );
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 홈 페이지 — 간결한 히어로 + 기능 카드
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function HomePage({ setPage, bp }) {
-  const features = [
-    { icon: "⚡", title: "즉시 실행",     desc: "브라우저에서 SQL을 바로 실행합니다. 설치 불필요." },
-    { icon: "💬", title: "자동 해설",     desc: "SELECT, JOIN, GROUP BY 등 구문별 해설을 탭으로 제공합니다." },
-    { icon: "⊞",  title: "테이블 시각화", desc: "CREATE TABLE을 분석해 구조 다이어그램을 보여줍니다." },
-    { icon: "🔍", title: "에러 분석",    desc: "문법 오류 원인과 해결 방법을 친절하게 알려줍니다." },
-    { icon: "📖", title: "개념 학습",    desc: "11개 SQL 개념을 체계적으로 정리했습니다." },
-    { icon: "💾", title: "문서 저장",    desc: "작성한 SQL을 저장하고 언제든지 불러옵니다." },
-  ];
-
-  return (
-    <div style={{ fontFamily: C.sans }}>
-      {/* 히어로 — 간결 구조 */}
-      <div style={{
-        background: C.surface, borderBottom: `1px solid ${C.border}`,
-        padding: bp.isMobile ? "36px 20px 40px" : bp.isTablet ? "44px 32px 48px" : "52px 48px 56px",
-      }}>
-        <div style={{
-          maxWidth: 1100, margin: "0 auto",
-          display: "flex", flexDirection: bp.isMobile || bp.isTablet ? "column" : "row",
-          gap: bp.isMobile ? 28 : 52, alignItems: "center",
-        }}>
-
-          {/* 왼쪽 텍스트 */}
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{
-              display: "inline-block", background: C.accentBg, border: `1px solid ${C.accentBdr}`,
-              borderRadius: 99, padding: "3px 12px", fontSize: 12, color: C.accent, fontWeight: 600, marginBottom: 14,
-            }}>
-              SQL 실습 · 학습 도구
-            </div>
-            <h1 style={{
-              fontSize: bp.isMobile ? 22 : bp.isTablet ? 27 : 32,
-              fontWeight: 800, color: C.text, lineHeight: 1.28, margin: "0 0 12px",
-            }}>
-              SQL을 실행하고<br />
-              <span style={{ color: C.accent }}>구조를 시각적으로 확인하세요</span>
-            </h1>
-            <p style={{ fontSize: bp.isMobile ? 13 : 14, color: C.textSub, lineHeight: 1.7, margin: "0 0 24px" }}>
-              코드를 작성하면 자동 해설 · 에러 분석 · 테이블 다이어그램을 제공합니다.
-            </p>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <Btn onClick={() => setPage("editor")} v="primary" sz={bp.isMobile ? "md" : "lg"}>✏ SQL 시작하기</Btn>
-              <Btn onClick={() => setPage("concepts")} sz={bp.isMobile ? "md" : "lg"}>📖 개념 학습</Btn>
-            </div>
-          </div>
-
-          {/* 오른쪽 에디터 미리보기 — 모바일 숨김 */}
-          {!bp.isMobile && (
-            <div style={{ flex: 1, minWidth: 0, maxWidth: 460 }}>
-              <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", boxShadow: "0 4px 20px rgba(0,0,0,.07)" }}>
-                {/* 에디터 헤더 */}
-                <div style={{ background: C.edBg, padding: "7px 13px", display: "flex", alignItems: "center", gap: 7 }}>
-                  <div style={{ display: "flex", gap: 4 }}>
-                    {["#ef4444","#f59e0b","#10b981"].map((c, i) => <div key={i} style={{ width: 10, height: 10, borderRadius: "50%", background: c }}/>)}
-                  </div>
-                  <span style={{ fontSize: 10, color: C.edMuted, fontFamily: C.mono, marginLeft: 4 }}>query.sql</span>
-                  <span style={{ marginLeft: "auto", fontSize: 10, background: C.green, color: "#fff", padding: "1px 7px", borderRadius: 3, fontWeight: 600 }}>실행됨</span>
-                </div>
-                {/* SQL 코드 */}
-                <div style={{ background: C.edBg, padding: "12px 15px" }}>
-                  <pre style={{ margin: 0, fontFamily: C.mono, fontSize: 12.5, lineHeight: 1.65, whiteSpace: "pre-wrap", color: C.edText }}>
-                    <span style={{color:C.edBlue}}>SELECT</span>{" s.name, s.gpa\n"}
-                    <span style={{color:C.edBlue}}>FROM</span>{" student s\n"}
-                    <span style={{color:C.edBlue}}>INNER JOIN</span>{" department d\n"}
-                    {"  "}<span style={{color:C.edBlue}}>ON</span>{" s.dept_id = d.dept_id\n"}
-                    <span style={{color:C.edBlue}}>WHERE</span>{" s.gpa >= "}<span style={{color:C.edGreen}}>3.5</span>{"\n"}
-                    <span style={{color:C.edBlue}}>ORDER BY</span>{" s.gpa "}<span style={{color:C.edBlue}}>DESC</span>;
-                  </pre>
-                </div>
-                {/* 결과 탭 미리보기 */}
-                <div style={{ background: C.surface }}>
-                  <div style={{ display: "flex", borderBottom: `1px solid ${C.border}` }}>
-                    {["결과","해설","에러"].map((t, i) => (
-                      <div key={t} style={{ padding: "6px 14px", fontSize: 12, color: i === 0 ? C.accent : C.muted, fontWeight: i === 0 ? 600 : 400, borderBottom: i === 0 ? `2px solid ${C.accent}` : "2px solid transparent", fontFamily: C.sans }}>
-                        {t}
-                      </div>
-                    ))}
-                    <div style={{ marginLeft: "auto", padding: "6px 12px", fontSize: 11, color: C.green, fontWeight: 600 }}>📊 2행</div>
-                  </div>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: C.mono, fontSize: 12 }}>
-                    <thead>
-                      <tr>{["name","gpa"].map(c => <th key={c} style={{ background: C.surfaceAlt, padding: "5px 13px", textAlign: "left", fontWeight: 600, color: C.textSub, borderBottom: `1px solid ${C.border}`, fontSize: 11 }}>{c}</th>)}</tr>
-                    </thead>
-                    <tbody>
-                      {[["박지호","3.91"],["김민준","3.85"]].map((r, i) => (
-                        <tr key={i}>
-                          <td style={{ padding: "5px 13px", borderBottom: `1px solid ${C.border}`, color: C.text }}>{r[0]}</td>
-                          <td style={{ padding: "5px 13px", borderBottom: `1px solid ${C.border}`, color: C.green, fontWeight: 600 }}>{r[1]}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* 기능 카드 */}
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: bp.isMobile ? "32px 16px" : "48px 24px" }}>
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: bp.isMobile ? "1fr" : bp.isTablet ? "1fr 1fr" : "repeat(3, 1fr)",
-          gap: 12,
-        }}>
-          {features.map(f => (
-            <div key={f.title} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 18px" }}>
-              <div style={{ fontSize: 22, marginBottom: 9 }}>{f.icon}</div>
-              <div style={{ fontWeight: 600, fontSize: 13.5, color: C.text, marginBottom: 5 }}>{f.title}</div>
-              <div style={{ fontSize: 12.5, color: C.textSub, lineHeight: 1.65 }}>{f.desc}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 로그인 / 회원가입 페이지
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function LoginPage({ setPage, onLogin }) {
-  const [tab, setTab] = useState("login");
-  const [id,  setId]  = useState("");
-  const [pw,  setPw]  = useState("");
-  const [err, setErr] = useState("");
-  const [loading, setL] = useState(false);
-
-  const submit = () => {
-    if (!id.trim() || !pw.trim()) { setErr("아이디와 비밀번호를 입력하세요."); return; }
-    if (tab === "register" && pw.length < 4) { setErr("비밀번호는 4자 이상이어야 합니다."); return; }
-    setErr(""); setL(true);
-    // 데모 모드 — 백엔드 없이 localStorage 저장
-    setTimeout(() => {
-      const u = { username: id, email: "" };
-      localStorage.setItem("sv_user", JSON.stringify(u));
-      onLogin(u);
-      setL(false);
-    }, 400);
-  };
-
-  const inp = {
-    width: "100%", padding: "9px 12px", borderRadius: 7, border: `1px solid ${C.border}`,
-    fontSize: 14, fontFamily: C.sans, color: C.text, background: C.bg,
-    outline: "none", boxSizing: "border-box",
-  };
-
-  return (
-    <div style={{ maxWidth: 380, margin: "60px auto", padding: "0 20px", fontFamily: C.sans }}>
-      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "28px 24px" }}>
-        {/* 탭 */}
-        <div style={{ display: "flex", gap: 3, marginBottom: 20, background: C.surfaceAlt, borderRadius: 8, padding: 3 }}>
-          {["login","register"].map(t => (
-            <button key={t} onClick={() => { setTab(t); setErr(""); }} style={{
-              flex: 1, padding: "7px", borderRadius: 6, border: "none",
-              background: tab === t ? C.surface : "transparent",
-              color: tab === t ? C.text : C.muted,
-              fontWeight: tab === t ? 600 : 400, fontSize: 13, cursor: "pointer",
-              fontFamily: C.sans, boxShadow: tab === t ? "0 1px 3px rgba(0,0,0,.08)" : "none",
-              transition: "all .14s",
-            }}>
-              {t === "login" ? "로그인" : "회원가입"}
-            </button>
-          ))}
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <input value={id} onChange={e => setId(e.target.value)} placeholder="아이디" style={inp}
-            onKeyDown={e => e.key === "Enter" && submit()} />
-          <input value={pw} onChange={e => setPw(e.target.value)} placeholder="비밀번호" type="password" style={inp}
-            onKeyDown={e => e.key === "Enter" && submit()} />
-          {err && <div style={{ fontSize: 12, color: C.red }}>{err}</div>}
-          <Btn onClick={submit} v="primary" sz="lg" full disabled={loading} style={{ marginTop: 4 }}>
-            {loading ? "처리 중..." : tab === "login" ? "로그인" : "가입하기"}
-          </Btn>
-        </div>
-        <div style={{ textAlign: "center", marginTop: 16, fontSize: 12, color: C.muted }}>
-          또는{" "}
-          <button onClick={() => setPage("editor")} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 12, fontFamily: C.sans, fontWeight: 500 }}>
-            로그인 없이 체험하기
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 테이블 다이어그램
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const BADGE_S = {
-  PK:        { bg: "#fef3c7", b: "#f59e0b", t: "#92400e" },
-  FK:        { bg: "#ede9fe", b: "#7c3aed", t: "#5b21b6" },
-  "NOT NULL":{ bg: "#dbeafe", b: "#2563eb", t: "#1e40af" },
-  UNIQUE:    { bg: "#d1fae5", b: "#16a34a", t: "#065f46" },
-  CHECK:     { bg: "#cffafe", b: "#0891b2", t: "#164e63" },
-  DEFAULT:   { bg: "#f3f4f6", b: "#9ca3af", t: "#374151" },
+const STORAGE = {
+  docs: "sv_docs",
+  recent: "sv_recent_sql",
+  user: "sv_user",
 };
-function ColBadge({ label }) {
-  const s = BADGE_S[label] || BADGE_S.DEFAULT;
-  return <span style={{ background: s.bg, border: `1px solid ${s.b}`, color: s.t, fontSize: 10, padding: "1px 5px", borderRadius: 3, fontWeight: 600 }}>{label}</span>;
+
+let sqlJsRuntimePromise;
+
+function loadSqlJsRuntime() {
+  if (typeof window === "undefined") {
+    return Promise.reject(new Error("sql.js can only run in the browser."));
+  }
+
+  if (window.initSqlJs) {
+    return Promise.resolve(window.initSqlJs);
+  }
+
+  if (!sqlJsRuntimePromise) {
+    sqlJsRuntimePromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = sqlJsUrl;
+      script.async = true;
+      script.onload = () => {
+        if (window.initSqlJs) resolve(window.initSqlJs);
+        else reject(new Error("sql.js runtime loaded without initSqlJs."));
+      };
+      script.onerror = () => reject(new Error("Failed to load sql.js runtime."));
+      document.head.appendChild(script);
+    });
+  }
+
+  return sqlJsRuntimePromise;
 }
 
-function TableDiagram({ schemas }) {
-  if (!schemas || schemas.length === 0)
-    return (
-      <div style={{ textAlign: "center", padding: 48, color: C.muted, fontSize: 13, fontFamily: C.sans }}>
-        CREATE TABLE을 실행하면 여기에 구조가 나타납니다.
-      </div>
-    );
-
-  const allFKs = schemas.flatMap(s => s.foreignKeys.map(fk => ({ from: s.tableName, ...fk })));
-
-  return (
-    <div style={{ fontFamily: C.sans }}>
-      {allFKs.length > 0 && (
-        <div style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "9px 13px", marginBottom: 18 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", marginBottom: 6 }}>🔗 외래키 관계</div>
-          {allFKs.map((fk, i) => (
-            <div key={i} style={{ fontSize: 12, color: "#5b21b6", fontFamily: C.mono }}>
-              {fk.from}.{fk.column} → {fk.refTable}.{fk.refColumn}
-            </div>
-          ))}
-        </div>
-      )}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
-        {schemas.map((schema, si) => (
-          <div key={si} style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", minWidth: 240, background: C.surface }}>
-            <div style={{ background: "#1e40af", padding: "7px 13px", display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ color: "#93c5fd", fontSize: 12 }}>⊞</span>
-              <span style={{ color: "#fff", fontWeight: 700, fontFamily: C.mono, fontSize: 13 }}>{schema.tableName}</span>
-              <span style={{ color: "#93c5fd", fontSize: 11, marginLeft: "auto" }}>{schema.columns.length} cols</span>
-            </div>
-            {schema.columns.map((col, ci) => (
-              <div key={ci} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 12px", borderBottom: `1px solid ${C.border}`, background: col.pk ? "#fffbeb" : ci % 2 ? "#fafafa" : C.surface }}>
-                <span style={{ width: 14, textAlign: "center", fontSize: 11, flexShrink: 0 }}>{col.pk ? "🔑" : col.fk ? "🔗" : "·"}</span>
-                <span style={{ fontFamily: C.mono, fontSize: 12, minWidth: 90, color: col.pk ? "#92400e" : col.fk ? "#5b21b6" : C.text, fontWeight: col.pk ? 700 : 400 }}>{col.name}</span>
-                <span style={{ fontFamily: C.mono, fontSize: 11, color: C.muted, flex: 1 }}>{col.type}</span>
-                <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-                  {col.pk      && <ColBadge label="PK"/>}
-                  {col.fk      && <ColBadge label="FK"/>}
-                  {col.notNull && !col.pk && <ColBadge label="NOT NULL"/>}
-                  {col.unique  && !col.pk && <ColBadge label="UNIQUE"/>}
-                  {col.check   && <ColBadge label="CHECK"/>}
-                  {col.default && <ColBadge label="DEFAULT"/>}
-                </div>
-              </div>
-            ))}
-            {schema.foreignKeys.length > 0 && (
-              <div style={{ padding: "5px 11px", background: "#f5f3ff", borderTop: `1px solid ${C.border}` }}>
-                {schema.foreignKeys.map((fk, fi) => (
-                  <div key={fi} style={{ fontSize: 11, color: "#5b21b6", fontFamily: C.mono }}>🔗 {fk.column} → {fk.refTable}({fk.refColumn})</div>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// SQL 편집기 — 메인 페이지
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const DEMO_SQL = `-- SQL을 작성하고 ▶ 실행 (Ctrl+Enter)
-
-CREATE TABLE department (
+const DEFAULT_SQL = `CREATE TABLE department (
   dept_id INT PRIMARY KEY,
-  dept_name VARCHAR(50) NOT NULL,
-  location VARCHAR(100)
+  name VARCHAR(50) NOT NULL
 );
 
 CREATE TABLE student (
   student_id INT PRIMARY KEY,
   name VARCHAR(50) NOT NULL,
-  age INT CHECK(age >= 18),
+  gpa REAL CHECK(gpa >= 0 AND gpa <= 4.5),
   dept_id INT,
-  gpa DECIMAL(3,2) DEFAULT 0.0,
   FOREIGN KEY (dept_id) REFERENCES department(dept_id)
 );
 
-INSERT INTO department VALUES (1, '컴퓨터공학', '공학관 3층');
-INSERT INTO department VALUES (2, '수학', '이학관 2층');
-INSERT INTO department VALUES (3, '경영학', '경영관 1층');
+INSERT INTO department (dept_id, name) VALUES (1, 'Computer Science');
+INSERT INTO student (student_id, name, gpa, dept_id) VALUES (101, 'Jiwon', 4.1, 1);
 
-INSERT INTO student VALUES (1, '김민준', 22, 1, 3.85);
-INSERT INTO student VALUES (2, '이서연', 21, 1, 3.42);
-INSERT INTO student VALUES (3, '박지호', 23, 2, 3.91);
-INSERT INTO student VALUES (4, '최수아', 20, 3, 3.15);
+SELECT student_id, name, gpa
+FROM student
+WHERE gpa >= 3.5
+ORDER BY gpa DESC;`;
 
-SELECT * FROM student WHERE age >= 22;`;
+const EXAMPLES = [
+  {
+    id: "create",
+    title: "CREATE TABLE",
+    type: "DDL",
+    desc: "테이블 구조 만들기",
+    sql: `CREATE TABLE student (
+  student_id INT PRIMARY KEY,
+  name VARCHAR(50) NOT NULL,
+  gpa REAL CHECK(gpa >= 0 AND gpa <= 4.5)
+);`,
+  },
+  {
+    id: "insert",
+    title: "INSERT",
+    type: "DML",
+    desc: "새 행 추가",
+    sql: `CREATE TABLE student (
+  student_id INT PRIMARY KEY,
+  name VARCHAR(50) NOT NULL,
+  gpa REAL
+);
 
-function EditorPage({ user, setPage, schemas, setSchemas, bp, initDoc, onInitDocConsumed }) {
-  const [sql,        setSql]        = useState(DEMO_SQL);
-  const [outputs,    setOutputs]    = useState([]);
-  const [sqlDb,      setSqlDb]      = useState(null);
-  const [dbLoading,  setDbLoading]  = useState(true);
-  const [activeTab,  setActiveTab]  = useState("result");   // result | explain | error
-  const [showDiagram,setShowDiagram]= useState(false);
-  const [showDocs,   setShowDocs]   = useState(false);
-  const [docList,    setDocList]    = useState([]);
-  const [docTitle,   setDocTitle]   = useState("제목 없음");
-  const [docId,      setDocId]      = useState(null);
-  const [saveMsg,    setSaveMsg]    = useState("");
-  const [elapsed,    setElapsed]    = useState(null);
-  const [mobilePanel,setMobilePanel]= useState("editor");   // 모바일: editor | result
-  const textareaRef = useRef(null);
+INSERT INTO student (student_id, name, gpa)
+VALUES (101, 'Jiwon', 4.1);`,
+  },
+  {
+    id: "select",
+    title: "SELECT",
+    type: "Query",
+    desc: "필요한 컬럼 조회",
+    sql: `CREATE TABLE student (
+  student_id INT PRIMARY KEY,
+  name VARCHAR(50),
+  gpa REAL
+);
 
-  // sql.js 초기화
-  useEffect(() => {
-    initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/${f}` })
-      .then(SQL => { setSqlDb(new SQL.Database()); setDbLoading(false); })
-      .catch(() => setDbLoading(false));
-  }, []);
+INSERT INTO student VALUES (101, 'Jiwon', 4.1);
+INSERT INTO student VALUES (102, 'Minseo', 3.2);
 
-  // 문서 목록 로드 (localStorage)
-  const loadDocList = useCallback(() => {
-    setDocList(JSON.parse(localStorage.getItem("sv_docs") || "[]"));
-  }, []);
-  useEffect(() => loadDocList(), [loadDocList]);
+SELECT student_id, name, gpa
+FROM student;`,
+  },
+  {
+    id: "where",
+    title: "WHERE",
+    type: "Filter",
+    desc: "조건으로 행 필터링",
+    sql: `CREATE TABLE student (
+  student_id INT PRIMARY KEY,
+  name VARCHAR(50),
+  gpa REAL
+);
 
-  // DocsPage에서 '열기' 로 전달받은 문서 처리
-  useEffect(() => {
-    if (initDoc) {
-      setSql(initDoc.sql_code);
-      setDocTitle(initDoc.title);
-      setDocId(initDoc.id);
-      setOutputs([]);
-      setElapsed(null);
-      onInitDocConsumed?.();
-    }
-  }, [initDoc]); // eslint-disable-line
+INSERT INTO student VALUES (101, 'Jiwon', 4.1);
+INSERT INTO student VALUES (102, 'Minseo', 3.2);
 
-  // SQL 실행
-  const run = useCallback(() => {
-    const t0    = performance.now();
-    const clean = sql.split("\n").filter(l => !l.trim().startsWith("--")).join("\n");
-    const stmts = splitStatements(clean);
-    const newOut = [];
-    const newSch = [...schemas];
+SELECT *
+FROM student
+WHERE gpa >= 3.5;`,
+  },
+  {
+    id: "join",
+    title: "JOIN",
+    type: "Relation",
+    desc: "테이블 연결",
+    sql: `CREATE TABLE department (
+  dept_id INT PRIMARY KEY,
+  name VARCHAR(50) NOT NULL
+);
 
-    for (const stmt of stmts) {
-      if (!stmt.trim()) continue;
-      const expl = explainSQL(stmt);
+CREATE TABLE student (
+  student_id INT PRIMARY KEY,
+  name VARCHAR(50) NOT NULL,
+  dept_id INT,
+  FOREIGN KEY (dept_id) REFERENCES department(dept_id)
+);
 
-      if (sqlDb) {
-        try {
-          const results = sqlDb.exec(stmt);
-          if (/CREATE\s+TABLE/i.test(stmt)) {
-            const sc = parseCreateTable(stmt);
-            if (sc) {
-              const idx = newSch.findIndex(s => s.tableName.toLowerCase() === sc.tableName.toLowerCase());
-              idx >= 0 ? (newSch[idx] = sc) : newSch.push(sc);
-            }
-            newOut.push({ type: "ok",    stmt, label: "CREATE TABLE", expl });
-          } else if (results.length > 0) {
-            newOut.push({ type: "table", stmt, label: "SELECT 결과",  expl, data: results[0] });
-          } else {
-            newOut.push({ type: "ok",    stmt, label: "실행 완료",    expl });
-          }
-        } catch (e) {
-          newOut.push({ type: "error", stmt, label: "오류", expl, err: analyzeError(stmt, e.message) });
-        }
-      } else {
-        // sql.js 없을 때 — 해설만
-        if (/CREATE\s+TABLE/i.test(stmt)) {
-          const sc = parseCreateTable(stmt);
-          if (sc) {
-            const idx = newSch.findIndex(s => s.tableName.toLowerCase() === sc.tableName.toLowerCase());
-            idx >= 0 ? (newSch[idx] = sc) : newSch.push(sc);
-          }
-        }
-        newOut.push({ type: "explain", stmt, label: "해설", expl });
-      }
-    }
+INSERT INTO department VALUES (1, 'Computer Science');
+INSERT INTO student VALUES (101, 'Jiwon', 1);
 
-    const ms = Math.round(performance.now() - t0);
-    setOutputs(newOut);
-    setSchemas(newSch);
-    setElapsed(ms);
+SELECT s.name, d.name AS department
+FROM student s
+JOIN department d ON s.dept_id = d.dept_id;`,
+  },
+  {
+    id: "group",
+    title: "GROUP BY",
+    type: "Aggregate",
+    desc: "그룹별 집계",
+    sql: `CREATE TABLE student (
+  student_id INT PRIMARY KEY,
+  dept VARCHAR(50),
+  gpa REAL
+);
 
-    // 탭 자동 전환
-    const hasError  = newOut.some(o => o.type === "error");
-    const hasResult = newOut.some(o => o.type === "table");
-    setActiveTab(hasError ? "error" : hasResult ? "result" : "result");
+INSERT INTO student VALUES (101, 'CS', 4.1);
+INSERT INTO student VALUES (102, 'CS', 3.8);
+INSERT INTO student VALUES (103, 'Design', 3.5);
 
-    // 모바일: 결과 패널로 자동 전환
-    if (bp.isMobile) setMobilePanel("result");
-  }, [sql, sqlDb, schemas, setSchemas, bp.isMobile]);
+SELECT dept, COUNT(*) AS count, AVG(gpa) AS avg_gpa
+FROM student
+GROUP BY dept;`,
+  },
+  {
+    id: "order",
+    title: "ORDER BY",
+    type: "Sort",
+    desc: "결과 정렬",
+    sql: `CREATE TABLE student (
+  student_id INT PRIMARY KEY,
+  name VARCHAR(50),
+  gpa REAL
+);
 
-  // Ctrl+Enter — stale closure 방지를 위해 ref 사용
-  const runRef = useRef(null);
-  runRef.current = run;
-  useEffect(() => {
-    const fn = e => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runRef.current(); } };
-    window.addEventListener("keydown", fn);
-    return () => window.removeEventListener("keydown", fn);
-  }, []);
+INSERT INTO student VALUES (101, 'Jiwon', 4.1);
+INSERT INTO student VALUES (102, 'Minseo', 3.2);
 
-  // 저장 (localStorage)
-  const save = () => {
-    const docs = JSON.parse(localStorage.getItem("sv_docs") || "[]");
-    const now  = new Date().toISOString();
-    if (docId) {
-      const idx = docs.findIndex(d => d.id === docId);
-      if (idx >= 0) docs[idx] = { ...docs[idx], title: docTitle, sql_code: sql, updated_at: now };
-      else docs.unshift({ id: docId, title: docTitle, sql_code: sql, created_at: now, updated_at: now });
-    } else {
-      const newId = Date.now().toString();
-      docs.unshift({ id: newId, title: docTitle, sql_code: sql, created_at: now, updated_at: now });
-      setDocId(newId);
-    }
-    localStorage.setItem("sv_docs", JSON.stringify(docs));
-    loadDocList();
-    setSaveMsg("저장됨 ✓");
-    setTimeout(() => setSaveMsg(""), 2000);
+SELECT *
+FROM student
+ORDER BY gpa DESC;`,
+  },
+  {
+    id: "pk",
+    title: "PRIMARY KEY",
+    type: "Constraint",
+    desc: "행을 고유하게 식별",
+    sql: `CREATE TABLE student (
+  student_id INT PRIMARY KEY,
+  email VARCHAR(100) UNIQUE,
+  name VARCHAR(50) NOT NULL
+);`,
+  },
+  {
+    id: "fk",
+    title: "FOREIGN KEY",
+    type: "Constraint",
+    desc: "테이블 관계 만들기",
+    sql: `CREATE TABLE department (
+  dept_id INT PRIMARY KEY,
+  name VARCHAR(50) NOT NULL
+);
+
+CREATE TABLE student (
+  student_id INT PRIMARY KEY,
+  name VARCHAR(50) NOT NULL,
+  dept_id INT,
+  FOREIGN KEY (dept_id) REFERENCES department(dept_id)
+);`,
+  },
+  {
+    id: "check",
+    title: "CHECK",
+    type: "Constraint",
+    desc: "값의 범위 제한",
+    sql: `CREATE TABLE student (
+  student_id INT PRIMARY KEY,
+  name VARCHAR(50) NOT NULL,
+  gpa REAL CHECK(gpa >= 0 AND gpa <= 4.5)
+);`,
+  },
+  {
+    id: "notnull",
+    title: "NOT NULL",
+    type: "Constraint",
+    desc: "필수 값 강제",
+    sql: `CREATE TABLE student (
+  student_id INT PRIMARY KEY,
+  name VARCHAR(50) NOT NULL,
+  email VARCHAR(100) NOT NULL
+);`,
+  },
+];
+
+const SQL_REFERENCE = [
+  {
+    id: "query",
+    title: "조회",
+    desc: "데이터를 읽고 원하는 형태로 좁히는 SQL의 중심 영역입니다.",
+    items: [
+      { name: "SELECT", summary: "테이블에서 필요한 컬럼과 계산 결과를 조회합니다.", syntax: "SELECT column1, column2 FROM table_name;", example: "SELECT name, gpa FROM student;", notes: ["실무에서는 SELECT *보다 필요한 컬럼을 명시하는 편이 안전합니다.", "별칭은 AS로 붙이면 결과 컬럼의 의미가 더 분명해집니다."] },
+      { name: "FROM", summary: "조회 기준이 되는 테이블이나 서브쿼리를 지정합니다.", syntax: "SELECT * FROM table_name;", example: "SELECT * FROM student;", notes: ["FROM에 별칭을 붙이면 JOIN이나 긴 쿼리에서 읽기 쉬워집니다.", "서브쿼리를 FROM에 넣으면 임시 결과를 테이블처럼 다룰 수 있습니다."] },
+      { name: "WHERE", summary: "조건을 만족하는 행만 남깁니다.", syntax: "SELECT * FROM table_name WHERE condition;", example: "SELECT * FROM student WHERE gpa >= 3.5;", notes: ["WHERE는 집계 전 행 단위 필터입니다.", "NULL 비교는 = NULL이 아니라 IS NULL을 사용합니다."] },
+      { name: "ORDER BY", summary: "조회 결과의 정렬 순서를 정합니다.", syntax: "ORDER BY column ASC|DESC;", example: "SELECT name, gpa FROM student ORDER BY gpa DESC;", notes: ["정렬은 결과를 읽기 좋게 하지만 큰 데이터에서는 비용이 큽니다.", "동점 처리가 필요하면 두 번째 정렬 기준을 함께 둡니다."] },
+      { name: "LIMIT / OFFSET", summary: "결과 개수를 제한하거나 페이지 단위로 넘깁니다.", syntax: "SELECT * FROM table_name LIMIT 10 OFFSET 20;", example: "SELECT * FROM student ORDER BY student_id LIMIT 10;", notes: ["페이지네이션에는 안정적인 ORDER BY가 거의 항상 필요합니다.", "대량 OFFSET은 느릴 수 있어 커서 기반 페이지네이션을 쓰기도 합니다."] },
+    ],
+  },
+  {
+    id: "join",
+    title: "관계와 JOIN",
+    desc: "여러 테이블을 연결해 하나의 의미 있는 결과로 만드는 영역입니다.",
+    items: [
+      { name: "INNER JOIN", summary: "양쪽 테이블에 모두 매칭되는 행만 조회합니다.", syntax: "A INNER JOIN B ON A.key = B.key", example: "SELECT s.name, d.name FROM student s JOIN department d ON s.dept_id = d.dept_id;", notes: ["가장 일반적인 JOIN입니다.", "ON 조건이 틀리면 결과가 크게 늘어나거나 사라집니다."] },
+      { name: "LEFT JOIN", summary: "왼쪽 테이블은 모두 유지하고 오른쪽 매칭 결과를 붙입니다.", syntax: "A LEFT JOIN B ON A.key = B.key", example: "SELECT s.name, d.name FROM student s LEFT JOIN department d ON s.dept_id = d.dept_id;", notes: ["매칭이 없으면 오른쪽 컬럼은 NULL이 됩니다.", "누락 데이터를 찾을 때 자주 사용합니다."] },
+      { name: "SELF JOIN", summary: "같은 테이블을 두 번 참조해 계층이나 비교 관계를 표현합니다.", syntax: "employee e JOIN employee m ON e.manager_id = m.id", example: "SELECT e.name, m.name AS manager FROM employee e LEFT JOIN employee m ON e.manager_id = m.id;", notes: ["반드시 별칭을 다르게 붙여야 읽기 쉽습니다.", "조직도, 추천 관계, 상하위 카테고리에 유용합니다."] },
+      { name: "CROSS JOIN", summary: "두 테이블의 모든 조합을 만듭니다.", syntax: "A CROSS JOIN B", example: "SELECT * FROM size CROSS JOIN color;", notes: ["조합 수가 곱으로 늘어나므로 신중히 사용합니다.", "옵션 조합 생성 같은 경우에 적합합니다."] },
+    ],
+  },
+  {
+    id: "aggregate",
+    title: "집계",
+    desc: "여러 행을 그룹으로 묶고 통계값을 계산합니다.",
+    items: [
+      { name: "GROUP BY", summary: "같은 값을 가진 행을 그룹으로 묶습니다.", syntax: "SELECT key, COUNT(*) FROM table GROUP BY key;", example: "SELECT dept_id, AVG(gpa) FROM student GROUP BY dept_id;", notes: ["SELECT에는 그룹 컬럼이나 집계 함수가 와야 합니다.", "그룹 기준이 많아질수록 결과 행도 세분화됩니다."] },
+      { name: "HAVING", summary: "집계가 끝난 뒤 그룹을 필터링합니다.", syntax: "GROUP BY key HAVING aggregate_condition", example: "SELECT dept_id, COUNT(*) FROM student GROUP BY dept_id HAVING COUNT(*) >= 2;", notes: ["WHERE는 집계 전, HAVING은 집계 후 조건입니다.", "집계 함수 조건은 HAVING에 두는 것이 자연스럽습니다."] },
+      { name: "COUNT / SUM / AVG", summary: "행 수, 합계, 평균을 계산하는 대표 집계 함수입니다.", syntax: "COUNT(*), SUM(amount), AVG(score)", example: "SELECT COUNT(*), AVG(gpa) FROM student;", notes: ["COUNT(*)는 행 수, COUNT(column)은 NULL이 아닌 값 수입니다.", "AVG는 NULL을 제외하고 평균을 계산합니다."] },
+      { name: "MIN / MAX", summary: "최솟값과 최댓값을 찾습니다.", syntax: "MIN(column), MAX(column)", example: "SELECT MIN(gpa), MAX(gpa) FROM student;", notes: ["날짜 컬럼에도 사용할 수 있습니다.", "최댓값 행 전체가 필요하면 서브쿼리나 ORDER BY LIMIT을 함께 씁니다."] },
+    ],
+  },
+  {
+    id: "schema",
+    title: "테이블 설계",
+    desc: "테이블, 컬럼, 타입, 키, 관계를 설계하는 DDL 영역입니다.",
+    items: [
+      { name: "CREATE TABLE", summary: "새 테이블과 컬럼 구조를 정의합니다.", syntax: "CREATE TABLE table_name (...);", example: "CREATE TABLE student (student_id INT PRIMARY KEY, name VARCHAR(50) NOT NULL);", notes: ["테이블명과 컬럼명은 도메인 의미가 드러나게 짓습니다.", "나중에 바꾸기 어려운 제약조건은 처음부터 신중히 둡니다."] },
+      { name: "PRIMARY KEY", summary: "각 행을 고유하게 식별하는 대표 키입니다.", syntax: "column INT PRIMARY KEY", example: "student_id INT PRIMARY KEY", notes: ["중복과 NULL이 허용되지 않습니다.", "대부분 숫자 ID나 UUID를 사용합니다."] },
+      { name: "FOREIGN KEY", summary: "다른 테이블의 키를 참조해 관계를 만듭니다.", syntax: "FOREIGN KEY (dept_id) REFERENCES department(dept_id)", example: "FOREIGN KEY (dept_id) REFERENCES department(dept_id)", notes: ["참조 대상 테이블이 먼저 있어야 합니다.", "삭제/수정 정책은 ON DELETE, ON UPDATE로 정합니다."] },
+      { name: "Data Types", summary: "컬럼에 저장할 값의 종류와 크기를 정합니다.", syntax: "INT, VARCHAR(n), DATE, REAL, BOOLEAN", example: "email VARCHAR(100), created_at DATETIME", notes: ["숫자, 문자열, 날짜 타입을 명확히 나누면 검증과 정렬이 쉬워집니다.", "SQLite는 타입이 느슨하므로 제약조건을 함께 쓰면 좋습니다."] },
+      { name: "ALTER TABLE", summary: "기존 테이블 구조를 변경합니다.", syntax: "ALTER TABLE table_name ADD COLUMN column_name type;", example: "ALTER TABLE student ADD COLUMN email VARCHAR(100);", notes: ["운영 DB에서는 마이그레이션 계획이 필요합니다.", "컬럼 삭제나 타입 변경은 DBMS마다 지원 방식이 다릅니다."] },
+    ],
+  },
+  {
+    id: "constraint",
+    title: "제약조건",
+    desc: "데이터가 잘못 들어오지 않도록 테이블이 스스로 지키는 규칙입니다.",
+    items: [
+      { name: "NOT NULL", summary: "반드시 값이 있어야 하는 컬럼을 만듭니다.", syntax: "name VARCHAR(50) NOT NULL", example: "email VARCHAR(100) NOT NULL", notes: ["필수 입력값을 DB 레벨에서도 보장합니다.", "기존 데이터가 있다면 적용 전 NULL 정리가 필요합니다."] },
+      { name: "UNIQUE", summary: "중복 값을 허용하지 않습니다.", syntax: "email VARCHAR(100) UNIQUE", example: "CREATE TABLE users (email VARCHAR(100) UNIQUE);", notes: ["로그인 이메일, 코드, 슬러그에 자주 사용합니다.", "DBMS마다 NULL의 UNIQUE 처리 방식이 다를 수 있습니다."] },
+      { name: "CHECK", summary: "값이 특정 조건을 만족하도록 제한합니다.", syntax: "CHECK (gpa >= 0 AND gpa <= 4.5)", example: "gpa REAL CHECK(gpa >= 0 AND gpa <= 4.5)", notes: ["점수, 상태값, 금액 범위 같은 도메인 규칙에 좋습니다.", "복잡한 비즈니스 규칙은 애플리케이션 로직과 함께 관리합니다."] },
+      { name: "DEFAULT", summary: "값을 생략했을 때 들어갈 기본값을 지정합니다.", syntax: "created_at DATETIME DEFAULT CURRENT_TIMESTAMP", example: "status VARCHAR(20) DEFAULT 'active'", notes: ["생성일, 상태, 카운터 초기값에 자주 사용합니다.", "기본값이 실제 비즈니스 의미와 맞는지 확인해야 합니다."] },
+    ],
+  },
+  {
+    id: "advanced",
+    title: "고급 쿼리",
+    desc: "복잡한 분석과 재사용 가능한 쿼리를 다루는 영역입니다.",
+    items: [
+      { name: "Subquery", summary: "쿼리 안에 다른 쿼리를 넣어 중간 결과를 사용합니다.", syntax: "SELECT * FROM A WHERE id IN (SELECT id FROM B);", example: "SELECT * FROM student WHERE dept_id IN (SELECT dept_id FROM department);", notes: ["IN, EXISTS, FROM 절에서 자주 사용합니다.", "복잡해지면 CTE로 이름을 붙이는 편이 읽기 쉽습니다."] },
+      { name: "CTE", summary: "WITH로 임시 결과에 이름을 붙여 쿼리를 단계화합니다.", syntax: "WITH ranked AS (...) SELECT * FROM ranked;", example: "WITH high_gpa AS (SELECT * FROM student WHERE gpa >= 3.5) SELECT * FROM high_gpa;", notes: ["긴 쿼리를 여러 단계로 나눌 수 있습니다.", "재귀 CTE는 트리 구조를 다룰 때 유용합니다."] },
+      { name: "Window Function", summary: "행을 유지한 채 순위, 누적합, 이동 평균을 계산합니다.", syntax: "ROW_NUMBER() OVER (PARTITION BY key ORDER BY value)", example: "SELECT name, ROW_NUMBER() OVER (ORDER BY gpa DESC) AS rank FROM student;", notes: ["GROUP BY와 달리 원본 행이 사라지지 않습니다.", "랭킹, 전월 대비, 누적 통계에 자주 쓰입니다."] },
+      { name: "Set Operators", summary: "두 쿼리 결과를 합치거나 비교합니다.", syntax: "UNION, UNION ALL, INTERSECT, EXCEPT", example: "SELECT name FROM student UNION SELECT name FROM alumni;", notes: ["UNION은 중복 제거, UNION ALL은 그대로 합칩니다.", "컬럼 개수와 타입이 맞아야 합니다."] },
+    ],
+  },
+  {
+    id: "operation",
+    title: "운영과 성능",
+    desc: "실제 서비스에서 SQL을 안전하고 빠르게 쓰기 위한 개념입니다.",
+    items: [
+      { name: "Transaction", summary: "여러 작업을 하나의 성공/실패 단위로 묶습니다.", syntax: "BEGIN; ... COMMIT; / ROLLBACK;", example: "BEGIN; UPDATE account SET balance = balance - 100; COMMIT;", notes: ["돈, 재고, 예약처럼 정합성이 중요한 작업에 필수입니다.", "실패하면 ROLLBACK으로 되돌립니다."] },
+      { name: "Index", summary: "검색과 정렬을 빠르게 하기 위한 자료구조입니다.", syntax: "CREATE INDEX idx_name ON table_name(column);", example: "CREATE INDEX idx_student_dept ON student(dept_id);", notes: ["읽기는 빨라지지만 쓰기 비용과 저장 공간이 늘어납니다.", "WHERE, JOIN, ORDER BY에 자주 쓰는 컬럼부터 검토합니다."] },
+      { name: "View", summary: "자주 쓰는 SELECT를 가상 테이블처럼 저장합니다.", syntax: "CREATE VIEW view_name AS SELECT ...;", example: "CREATE VIEW high_gpa_students AS SELECT * FROM student WHERE gpa >= 3.5;", notes: ["복잡한 조회를 재사용하기 좋습니다.", "권한 분리나 읽기 전용 뷰에도 활용됩니다."] },
+      { name: "Normalization", summary: "중복을 줄이고 관계를 명확히 하기 위한 설계 원칙입니다.", syntax: "entity -> table, relationship -> key", example: "student.dept_id -> department.dept_id", notes: ["중복 데이터를 줄이면 수정 불일치가 줄어듭니다.", "조회 성능 때문에 일부러 반정규화하는 경우도 있습니다."] },
+    ],
+  },
+];
+
+const CONCEPTS = SQL_REFERENCE.flatMap(group => group.items.map(item => item.name)).slice(0, 18);
+
+const VISUAL_TABLES = [
+  {
+    name: "department",
+    x: 36,
+    y: 52,
+    columns: [
+      ["dept_id", "INT", "PK"],
+      ["name", "VARCHAR(50)", "NN"],
+    ],
+  },
+  {
+    name: "student",
+    x: 360,
+    y: 48,
+    columns: [
+      ["student_id", "INT", "PK"],
+      ["name", "VARCHAR(50)", "NN"],
+      ["gpa", "REAL", "CHECK"],
+      ["dept_id", "INT", "FK"],
+    ],
+  },
+  {
+    name: "enrollment",
+    x: 204,
+    y: 258,
+    columns: [
+      ["student_id", "INT", "FK"],
+      ["course_id", "INT", "FK"],
+      ["grade", "VARCHAR(2)", ""],
+    ],
+  },
+  {
+    name: "course",
+    x: 612,
+    y: 250,
+    columns: [
+      ["course_id", "INT", "PK"],
+      ["title", "VARCHAR(80)", "NN"],
+      ["dept_id", "INT", "FK"],
+    ],
+  },
+];
+
+const QUERY_FLOW = [
+  ["FROM", "student 테이블을 기준으로 시작"],
+  ["JOIN", "department와 dept_id로 연결"],
+  ["WHERE", "gpa >= 3.5 행만 남김"],
+  ["GROUP BY", "학과별로 묶음"],
+  ["SELECT", "필요한 컬럼과 집계값 선택"],
+  ["ORDER BY", "평균 GPA 순으로 정렬"],
+];
+
+const JOIN_TYPES = [
+  ["INNER JOIN", "겹치는 데이터만", "학생과 학과가 모두 있는 행"],
+  ["LEFT JOIN", "왼쪽은 모두 유지", "학과가 없는 학생도 확인"],
+  ["FULL JOIN", "양쪽 전체 비교", "누락 관계 점검"],
+];
+
+const CONSTRAINT_STEPS = [
+  ["입력", "새 학생 행이 들어옴"],
+  ["NOT NULL", "name이 비어 있지 않은지 확인"],
+  ["CHECK", "gpa가 0부터 4.5 사이인지 확인"],
+  ["PRIMARY KEY", "student_id 중복 여부 확인"],
+  ["FOREIGN KEY", "dept_id가 department에 존재하는지 확인"],
+  ["저장", "모든 규칙을 통과하면 테이블에 반영"],
+];
+
+function readJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJSON(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function Button({ children, onClick, variant = "default", disabled, title, style }) {
+  const variants = {
+    default: { background: C.panel, color: C.text, border: `1px solid ${C.line}` },
+    primary: { background: C.accent, color: "#fff", border: `1px solid ${C.accent}` },
+    dark: { background: C.dark2, color: "#e5e7eb", border: `1px solid ${C.darkLine}` },
+    ghost: { background: "transparent", color: C.sub, border: "1px solid transparent" },
+    danger: { background: "#fff1f2", color: C.danger, border: "1px solid #fecdd3" },
   };
 
-  // 문서 불러오기
-  const loadDoc = (doc) => {
-    setSql(doc.sql_code);
-    setDocTitle(doc.title);
-    setDocId(doc.id);
-    setOutputs([]);
-    setElapsed(null);
-    setShowDocs(false);
-  };
-
-  // 통계
-  const resultRowCount = outputs.filter(o => o.type === "table").reduce((a, o) => a + (o.data?.values?.length || 0), 0);
-  const errorCount     = outputs.filter(o => o.type === "error").length;
-  const lineCount      = sql.split("\n").length;
-
-  // ── 탭 콘텐츠 ────────────────────────────────────────────────────────────────
-
-  const ResultPanel = () => {
-    if (outputs.length === 0)
-      return (
-        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", color: C.muted, textAlign:"center", padding:28, fontFamily: C.sans }}>
-          <div style={{ fontSize:38, marginBottom:12 }}>▶</div>
-          <div style={{ fontSize:13.5, color: C.textSub, marginBottom:6 }}>아직 실행된 SQL이 없습니다</div>
-          <div style={{ fontSize:12 }}>위에 SQL을 입력하고 실행 버튼을 누르세요 (Ctrl+Enter)</div>
-        </div>
-      );
-    return (
-      <div style={{ display:"flex", flexDirection:"column", gap:10, padding:14, overflow:"auto" }}>
-        {outputs.map((out, i) => {
-          if (out.type === "error") return null;
-          return (
-            <div key={i} style={{ border:`1px solid ${C.border}`, borderRadius:8, overflow:"hidden" }}>
-              <div style={{ padding:"5px 11px", background: C.surfaceAlt, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                <span style={{ fontSize:11, fontWeight:600, color: out.type === "ok" ? C.green : C.text, fontFamily: C.sans }}>
-                  {out.type === "ok" ? "✅" : "📊"} {out.label}
-                </span>
-                <code style={{ fontSize:10, fontFamily: C.mono, color: C.muted }}>{out.stmt?.replace(/\s+/g," ").slice(0,48)}</code>
-              </div>
-              {out.type === "table" && out.data && (
-                <>
-                  <div style={{ overflowX:"auto" }}>
-                    <table style={{ width:"100%", borderCollapse:"collapse", fontFamily: C.mono, fontSize:12 }}>
-                      <thead>
-                        <tr>{out.data.columns.map((c,ci) => <th key={ci} style={{ background:"#1e40af", color:"#e0f2fe", padding:"6px 11px", textAlign:"left", fontWeight:600, whiteSpace:"nowrap", fontSize:11 }}>{c}</th>)}</tr>
-                      </thead>
-                      <tbody>
-                        {out.data.values.map((row,ri) => (
-                          <tr key={ri} style={{ background: ri%2 ? C.surfaceAlt : C.surface }}>
-                            {row.map((cell,ci) => (
-                              <td key={ci} style={{ padding:"5px 11px", borderBottom:`1px solid ${C.border}`, color: cell==null ? C.muted : C.text, fontStyle: cell==null ? "italic":"normal", whiteSpace:"nowrap" }}>
-                                {cell==null ? "NULL" : String(cell)}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div style={{ padding:"3px 11px", fontSize:10, color: C.muted, fontFamily: C.sans }}>{out.data.values.length}개 행</div>
-                </>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
-
-  const ExplainPanel = () => (
-    <div style={{ display:"flex", flexDirection:"column", gap:10, padding:14, overflow:"auto" }}>
-      {outputs.length === 0
-        ? <div style={{ textAlign:"center", padding:32, color: C.muted, fontSize:13, fontFamily: C.sans }}>실행 후 해설이 여기에 표시됩니다.</div>
-        : outputs.map((out, i) => out.expl?.length > 0 && (
-            <div key={i} style={{ border:`1px solid ${C.border}`, borderRadius:8, overflow:"hidden" }}>
-              <div style={{ padding:"5px 11px", background: C.surfaceAlt, fontSize:10, fontFamily: C.sans }}>
-                <code style={{ fontFamily: C.mono, color: C.textSub }}>{out.stmt?.replace(/\s+/g," ").slice(0,60)}</code>
-              </div>
-              <div style={{ padding:"10px 12px", display:"flex", flexDirection:"column", gap:5 }}>
-                {out.expl.map((exp, ei) => (
-                  <div key={ei} style={{ display:"flex", gap:8, alignItems:"flex-start" }}>
-                    <span style={{
-                      background: exp.color+"18", color: exp.color,
-                      fontSize:10, padding:"2px 6px", borderRadius:4, fontWeight:700,
-                      fontFamily: C.mono, whiteSpace:"nowrap", flexShrink:0, marginTop:1,
-                    }}>{exp.kw}</span>
-                    <span style={{ fontSize:12, color: C.textSub, lineHeight:1.6, fontFamily: C.sans }}
-                      dangerouslySetInnerHTML={{ __html: exp.text }}/>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))
-      }
-    </div>
+  return (
+    <button
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        ...variants[variant],
+        height: 32,
+        padding: "0 11px",
+        borderRadius: 7,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 6,
+        fontSize: 12,
+        fontWeight: 600,
+        fontFamily: C.sans,
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.55 : 1,
+        whiteSpace: "nowrap",
+        ...style,
+      }}
+    >
+      {children}
+    </button>
   );
+}
 
-  const ErrorPanel = () => {
-    const errs = outputs.filter(o => o.type === "error");
-    return (
-      <div style={{ display:"flex", flexDirection:"column", gap:10, padding:14, overflow:"auto" }}>
-        {errs.length === 0
-          ? <div style={{ textAlign:"center", padding:32, color: C.green, fontSize:13, fontFamily: C.sans }}>✅ 오류 없음</div>
-          : errs.map((out, i) => (
-              <div key={i} style={{ background: C.redBg, border:`1px solid ${C.redBdr}`, borderRadius:8, padding:"11px 13px" }}>
-                <div style={{ fontWeight:700, color: C.red, fontSize:13, marginBottom:5, fontFamily: C.sans }}>🔍 {out.err?.title || "오류"}</div>
-                <div style={{ fontSize:13, color:"#991b1b", lineHeight:1.6, fontFamily: C.sans }}
-                  dangerouslySetInnerHTML={{ __html: out.err?.msg || "알 수 없는 오류" }}/>
-                {out.err?.hint && (
-                  <div style={{ marginTop:7, padding:"6px 10px", background: C.yellowBg, border:`1px solid ${C.yellowBdr}`, borderRadius:6, fontSize:11.5, color:"#92400e", fontFamily: C.sans }}>
-                    💡 {out.err.hint}
-                  </div>
-                )}
-                <div style={{ marginTop:7, fontSize:10, color: C.muted, fontFamily: C.mono }}>
-                  {out.stmt?.replace(/\s+/g," ").slice(0,80)}
-                </div>
-              </div>
-            ))
-        }
-      </div>
-    );
-  };
-
-  // 탭 설정
-  const TABS = [
-    { id:"result",  label:"결과",   badge: resultRowCount > 0 ? `${resultRowCount}행` : null, badgeColor: C.green },
-    { id:"explain", label:"해설",   badge: null },
-    { id:"error",   label:"에러",   badge: errorCount > 0 ? `${errorCount}` : null, badgeColor: C.red },
+function NavBar({ page, setPage, user, onLogout }) {
+  const items = [
+    ["home", "홈"],
+    ["editor", "SQL 작성"],
+    ["visualizer", "시각화"],
+    ["concepts", "개념"],
+    ["docs", "문서"],
   ];
 
   return (
-    <div style={{ display:"flex", flexDirection:"column", height: bp.isMobile ? "auto" : "calc(100vh - 50px)", fontFamily: C.sans, overflow:"hidden" }}>
-
-      {/* ── 툴바 ─────────────────────────────────────────────────────────────── */}
-      <div style={{
-        background: C.surface, borderBottom:`1px solid ${C.border}`,
-        padding:"7px 10px", display:"flex", alignItems:"center", gap:5,
-        flexShrink:0, flexWrap:"wrap", minHeight:44,
-      }}>
-        {/* 문서 제목 */}
-        <input
-          value={docTitle}
-          onChange={e => setDocTitle(e.target.value)}
-          style={{
-            border:"none", outline:"none", fontSize:13, fontFamily: C.sans,
-            color: C.text, fontWeight:500, background:"transparent",
-            minWidth:70, maxWidth: bp.isMobile ? 90 : 130,
-          }}
-          title="클릭하여 제목 수정"
-        />
-
-        <div style={{ width:1, height:16, background: C.border, margin:"0 2px" }}/>
-
-        {/* 툴 버튼들 */}
-        <Btn sz="sm" v="ghost" onClick={() => { setSql(""); setOutputs([]); setDocTitle("제목 없음"); setDocId(null); setElapsed(null); }} title="초기화 (SQL 지우기)">🗑</Btn>
-        {!bp.isMobile && <Btn sz="sm" v="ghost" onClick={() => { setShowDocs(true); loadDocList(); }} title="저장된 문서 불러오기">📂</Btn>}
-        <Btn sz="sm" v="ghost" onClick={save} title="현재 SQL 저장">💾</Btn>
-        <Btn sz="sm" onClick={() => setShowDiagram(true)} style={{ color:"#7c3aed", background:"#f5f3ff", border:"1px solid #ddd6fe", fontSize:12 }} title="테이블 구조 다이어그램">⊞ 시각화</Btn>
-
-        <div style={{ flex:1 }}/>
-
-        {/* 상태 표시 */}
-        {saveMsg && <span style={{ fontSize:12, color: C.green, fontWeight:600 }}>{saveMsg}</span>}
-        {!bp.isMobile && elapsed !== null && <span style={{ fontSize:11, color: C.muted }}>⏱ {elapsed}ms</span>}
-        {!bp.isMobile && resultRowCount > 0 && <span style={{ fontSize:11, color: C.green, fontWeight:600 }}>📊 {resultRowCount}행</span>}
-        {!bp.isMobile && errorCount > 0 && <span style={{ fontSize:11, color: C.red, fontWeight:600 }}>❌ {errorCount}오류</span>}
-
-        {/* 실행 버튼 */}
-        <Btn v="primary" onClick={run} disabled={dbLoading} style={{ minWidth:70 }}>
-          {dbLoading ? "로딩..." : "▶ 실행"}
-        </Btn>
-      </div>
-
-      {/* ── 모바일 패널 토글 ─────────────────────────────────────────────────── */}
-      {bp.isMobile && (
-        <div style={{ display:"flex", background: C.surfaceAlt, borderBottom:`1px solid ${C.border}` }}>
-          {[{id:"editor",label:"✏ 편집기"},{id:"result",label:"📊 결과"}].map(v => (
-            <button key={v.id} onClick={() => setMobilePanel(v.id)} style={{
-              flex:1, padding:"9px", border:"none",
-              background: mobilePanel === v.id ? C.surface : "transparent",
-              color: mobilePanel === v.id ? C.accent : C.muted,
-              fontWeight: mobilePanel === v.id ? 600 : 400,
-              fontSize:13, cursor:"pointer", fontFamily: C.sans,
-              borderBottom: mobilePanel === v.id ? `2px solid ${C.accent}` : "2px solid transparent",
-            }}>{v.label}</button>
-          ))}
-        </div>
-      )}
-
-      {/* ── 메인 2분할 영역 ──────────────────────────────────────────────────── */}
-      <div style={{
-        flex:1, display:"flex",
-        flexDirection: bp.isMobile ? "column" : "row",
-        overflow: bp.isMobile ? "visible" : "hidden",
-        minHeight:0,
-      }}>
-
-        {/* 좌측: SQL 에디터 */}
-        {(!bp.isMobile || mobilePanel === "editor") && (
-          <div style={{
-            flex: bp.isTablet ? "0 0 44%" : "0 0 50%",
-            display:"flex", flexDirection:"column",
-            borderRight: bp.isMobile ? "none" : `1px solid ${C.border}`,
-            minHeight: bp.isMobile ? 320 : 0,
-          }}>
-            {/* 에디터 헤더 */}
-            <div style={{ background: C.edBg, padding:"6px 11px", display:"flex", alignItems:"center", gap:7, flexShrink:0 }}>
-              <div style={{ display:"flex", gap:4 }}>
-                {["#ef4444","#f59e0b","#10b981"].map((c, i) => <div key={i} style={{ width:10, height:10, borderRadius:"50%", background:c }}/>)}
-              </div>
-              <span style={{ color: C.edMuted, fontSize:10, fontFamily: C.mono }}>SQL · {lineCount}줄</span>
-              {dbLoading && <span style={{ marginLeft:"auto", fontSize:10, color: C.edMuted }}>엔진 로딩 중...</span>}
-            </div>
-            {/* 에디터 본체 */}
-            <div style={{ flex:1, display:"flex", background: C.edBg, overflow:"auto", minHeight: bp.isMobile ? 280 : 0 }}>
-              {/* 줄번호 */}
-              <div style={{
-                padding:"12px 8px 12px 10px", color: C.edMuted, fontSize:12,
-                fontFamily: C.mono, lineHeight:"1.6", textAlign:"right",
-                userSelect:"none", minWidth:32, borderRight:`1px solid ${C.edGutter}`,
-                flexShrink:0,
-              }}>
-                {Array.from({ length: lineCount }, (_, i) => <div key={i}>{i + 1}</div>)}
-              </div>
-              {/* 텍스트 입력 */}
-              <textarea
-                ref={textareaRef}
-                value={sql}
-                onChange={e => setSql(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === "Tab") {
-                    e.preventDefault();
-                    const pos = e.target.selectionStart;
-                    setSql(s => s.slice(0, pos) + "  " + s.slice(pos));
-                    setTimeout(() => {
-                      if (textareaRef.current) {
-                        textareaRef.current.selectionStart = textareaRef.current.selectionEnd = pos + 2;
-                      }
-                    }, 0);
-                  }
-                }}
-                spellCheck={false}
-                style={{
-                  flex:1, background:"transparent", border:"none", outline:"none",
-                  color: C.edText, fontFamily: C.mono, fontSize:13, lineHeight:"1.6",
-                  padding:"12px 13px", resize:"none",
-                  minHeight: bp.isMobile ? 260 : 0,
-                }}
-              />
-            </div>
-          </div>
-        )}
-
-        {/* 우측: 결과 / 해설 / 에러 탭 */}
-        {(!bp.isMobile || mobilePanel === "result") && (
-          <div style={{ flex:1, display:"flex", flexDirection:"column", minHeight:0, background: C.bg }}>
-            {/* 탭 헤더 */}
-            <div style={{ display:"flex", borderBottom:`1px solid ${C.border}`, background: C.surface, flexShrink:0 }}>
-              {TABS.map(t => (
-                <button
-                  key={t.id}
-                  onClick={() => setActiveTab(t.id)}
-                  style={{
-                    padding:"8px 15px", border:"none", background:"transparent",
-                    color: activeTab === t.id ? C.accent : C.textSub,
-                    fontWeight: activeTab === t.id ? 600 : 400,
-                    fontSize:13, cursor:"pointer", fontFamily: C.sans,
-                    borderBottom: activeTab === t.id ? `2px solid ${C.accent}` : "2px solid transparent",
-                    display:"flex", alignItems:"center", gap:5, marginBottom:-1,
-                    transition:"all .13s",
-                  }}
-                >
-                  {t.label}
-                  {t.badge && (
-                    <span style={{
-                      background: t.badgeColor || C.accent,
-                      color:"#fff", fontSize:10, padding:"1px 5px", borderRadius:99, fontWeight:700,
-                    }}>{t.badge}</span>
-                  )}
-                </button>
-              ))}
-              {/* 빠른 문서 불러오기 (모바일) */}
-              {bp.isMobile && (
-                <button onClick={() => { setShowDocs(true); loadDocList(); }} style={{
-                  marginLeft:"auto", padding:"8px 10px", border:"none", background:"transparent",
-                  color: C.muted, fontSize:14, cursor:"pointer",
-                }} title="저장된 문서">📂</button>
-              )}
-            </div>
-            {/* 탭 콘텐츠 */}
-            <div style={{ flex:1, overflow:"auto", minHeight: bp.isMobile ? 300 : 0 }}>
-              {activeTab === "result"  && <ResultPanel />}
-              {activeTab === "explain" && <ExplainPanel />}
-              {activeTab === "error"   && <ErrorPanel />}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* 테이블 다이어그램 모달 */}
-      <Modal open={showDiagram} onClose={() => setShowDiagram(false)} title="⊞ 테이블 구조 시각화" wide>
-        <TableDiagram schemas={schemas} />
-      </Modal>
-
-      {/* 문서 목록 모달 */}
-      <Modal open={showDocs} onClose={() => setShowDocs(false)} title="📂 저장된 문서">
-        {docList.length === 0
-          ? <div style={{ textAlign:"center", padding:24, color: C.muted, fontSize:13, fontFamily: C.sans }}>저장된 문서가 없습니다.</div>
-          : docList.map(doc => (
-              <div
-                key={doc.id}
-                onClick={() => loadDoc(doc)}
-                style={{
-                  padding:"11px 13px", borderRadius:7, border:`1px solid ${C.border}`,
-                  cursor:"pointer", marginBottom:7,
-                  display:"flex", justifyContent:"space-between", alignItems:"center",
-                  fontFamily: C.sans, transition:"border-color .13s",
-                }}
-                onMouseEnter={e => e.currentTarget.style.borderColor = C.accent}
-                onMouseLeave={e => e.currentTarget.style.borderColor = C.border}
-              >
-                <div>
-                  <div style={{ fontWeight:600, fontSize:13.5, color: C.text }}>{doc.title}</div>
-                  <div style={{ fontSize:11, color: C.muted, marginTop:2 }}>{new Date(doc.updated_at).toLocaleString("ko-KR")}</div>
-                </div>
-                <span style={{ color: C.muted }}>›</span>
-              </div>
-            ))
-        }
-      </Modal>
-    </div>
-  );
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 시각화 단독 페이지
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function VisualizerPage({ schemas, setSchemas, bp }) {
-  const [sql, setSql] = useState(
-    `CREATE TABLE department (\n  dept_id INT PRIMARY KEY,\n  dept_name VARCHAR(50) NOT NULL\n);\n\nCREATE TABLE student (\n  student_id INT PRIMARY KEY,\n  name VARCHAR(50) NOT NULL,\n  dept_id INT,\n  FOREIGN KEY (dept_id) REFERENCES department(dept_id)\n);`
-  );
-
-  const analyze = () => {
-    const newSch = [];
-    splitStatements(sql).forEach(stmt => {
-      if (/CREATE\s+TABLE/i.test(stmt)) {
-        const s = parseCreateTable(stmt);
-        if (s) newSch.push(s);
-      }
-    });
-    setSchemas(newSch);
-  };
-
-  return (
-    <div style={{ maxWidth:1100, margin:"0 auto", padding: bp.isMobile ? "24px 16px" : "36px 24px", fontFamily: C.sans }}>
-      <div style={{ marginBottom:18 }}>
-        <h2 style={{ margin:"0 0 4px", fontSize:17, fontWeight:700, color: C.text }}>⊞ 테이블 구조 시각화</h2>
-        <p style={{ margin:0, fontSize:12.5, color: C.textSub }}>CREATE TABLE SQL을 입력하면 구조를 다이어그램으로 보여줍니다.</p>
-      </div>
-      <div style={{ display:"flex", flexDirection: bp.isMobile ? "column" : "row", gap:18 }}>
-        <div style={{ flex:1, minWidth:0 }}>
-          <div style={{ border:`1px solid ${C.border}`, borderRadius:8, overflow:"hidden" }}>
-            <div style={{ background: C.edBg, padding:"6px 11px", fontSize:10, color: C.edMuted, fontFamily: C.mono }}>CREATE TABLE SQL</div>
-            <textarea
-              value={sql}
-              onChange={e => setSql(e.target.value)}
-              style={{
-                width:"100%", minHeight:220, background: C.edBg, border:"none", outline:"none",
-                color: C.edText, fontFamily: C.mono, fontSize:12.5, lineHeight:1.65,
-                padding:"11px 13px", resize:"vertical", boxSizing:"border-box",
-              }}
-              spellCheck={false}
-            />
-          </div>
-          <div style={{ marginTop:10 }}>
-            <Btn v="primary" onClick={analyze}>⊞ 구조 분석</Btn>
-          </div>
-        </div>
-        <div style={{ flex:1, minWidth:0 }}>
-          <div style={{ background: C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:14, minHeight:200 }}>
-            <TableDiagram schemas={schemas} />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 개념 학습 페이지 — Java API 스타일 사이드바
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const CONCEPTS_DATA = [
-  { id:"select", title:"SELECT", cat:"DML",
-    def:"테이블에서 데이터를 조회하는 가장 기본적인 명령어입니다.",
-    easy:"도서관 목록에서 원하는 책을 골라보는 것처럼, SELECT는 테이블에서 원하는 데이터만 꺼내봅니다.",
-    syntax:"SELECT 컬럼1, 컬럼2\nFROM 테이블명\n[WHERE 조건]\n[GROUP BY 컬럼]\n[HAVING 그룹조건]\n[ORDER BY 컬럼 ASC|DESC]\n[LIMIT 개수]",
-    example:"-- 전체 조회\nSELECT * FROM student;\n\n-- 특정 컬럼\nSELECT name, gpa FROM student;\n\n-- 조건 + 정렬\nSELECT name, gpa\nFROM student\nWHERE gpa >= 3.5\nORDER BY gpa DESC;",
-    result:"조건에 맞는 행이 테이블 형태로 반환됩니다.",
-    caution:["실행 순서: FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY","WHERE절에는 집계함수 사용 불가 — HAVING 사용"],
-    mistakes:["WHERE절에 COUNT() 등 집계함수 사용","GROUP BY 없이 집계함수와 일반 컬럼 혼용"] },
-  { id:"insert", title:"INSERT", cat:"DML",
-    def:"테이블에 새 행(데이터)을 추가하는 명령어입니다.",
-    easy:"엑셀에서 새 줄에 데이터를 입력하는 것과 같습니다.",
-    syntax:"INSERT INTO 테이블명 (컬럼1, 컬럼2)\nVALUES (값1, 값2);",
-    example:"INSERT INTO student (student_id, name, age)\nVALUES (1, '김민준', 22);\n\n-- 전체 컬럼 순서대로\nINSERT INTO student VALUES (2, '이서연', 21, 1, 3.42);",
-    result:"지정한 값이 테이블에 새 행으로 추가됩니다.",
-    caution:["NOT NULL 컬럼은 반드시 값 제공","PRIMARY KEY 중복 삽입 시 오류"],
-    mistakes:["컬럼 수와 VALUES 수 불일치","문자열에 따옴표 누락"] },
-  { id:"update", title:"UPDATE", cat:"DML",
-    def:"테이블의 기존 데이터를 수정하는 명령어입니다.",
-    easy:"엑셀 셀을 클릭해서 값을 바꾸는 것과 같습니다.",
-    syntax:"UPDATE 테이블명\nSET 컬럼1=값1, 컬럼2=값2\n[WHERE 조건];",
-    example:"UPDATE student\nSET gpa = 4.0\nWHERE student_id = 1;",
-    result:"조건에 맞는 행의 지정 컬럼이 변경됩니다.",
-    caution:["⚠️ WHERE 없이 UPDATE하면 모든 행이 수정됩니다!"],
-    mistakes:["WHERE 조건 누락으로 전체 행 수정"] },
-  { id:"delete", title:"DELETE", cat:"DML",
-    def:"테이블에서 행을 삭제하는 명령어입니다.",
-    easy:"엑셀에서 행 전체를 삭제하는 것과 같습니다.",
-    syntax:"DELETE FROM 테이블명\n[WHERE 조건];",
-    example:"DELETE FROM student WHERE student_id = 3;\n\n-- ⚠️ 전체 삭제\nDELETE FROM student;",
-    result:"조건에 맞는 행이 테이블에서 삭제됩니다.",
-    caution:["⚠️ WHERE 없이 DELETE하면 모든 행이 삭제됩니다!","삭제된 데이터는 복구 불가"],
-    mistakes:["WHERE 조건 누락으로 전체 삭제"] },
-  { id:"join", title:"JOIN", cat:"DML",
-    def:"두 테이블을 특정 컬럼 기준으로 합쳐 조회하는 연산입니다.",
-    easy:"학생 목록과 학과 목록이 따로 있을 때, 한 번에 보려면 두 표를 합쳐야 합니다. JOIN이 이 역할을 합니다.",
-    syntax:"-- INNER JOIN (교집합)\nSELECT ...\nFROM A INNER JOIN B ON A.키 = B.키\n\n-- LEFT JOIN\nFROM A LEFT JOIN B ON A.키 = B.키",
-    example:"SELECT s.name, d.dept_name\nFROM student s\nINNER JOIN department d\n  ON s.dept_id = d.dept_id;",
-    result:"INNER JOIN은 양쪽 모두 일치하는 행, LEFT JOIN은 왼쪽 테이블 전체를 반환합니다.",
-    caution:["INNER JOIN은 일치하지 않는 행 제외","LEFT JOIN은 오른쪽 불일치 시 NULL"],
-    mistakes:["ON 조건 누락 시 카테시안 곱 발생","모호한 컬럼명 사용"] },
-  { id:"groupby", title:"GROUP BY", cat:"DML",
-    def:"같은 값을 가진 행들을 그룹으로 묶어 집계하는 절입니다.",
-    easy:"반별 평균 성적을 구하려면 반 기준으로 묶은 뒤 평균을 내야 합니다.",
-    syntax:"SELECT 그룹컬럼, 집계함수(컬럼)\nFROM 테이블\nGROUP BY 그룹컬럼\n[HAVING 그룹조건]",
-    example:"SELECT dept_id, COUNT(*) AS 학생수\nFROM student GROUP BY dept_id;\n\n-- HAVING 필터\nSELECT dept_id, AVG(gpa)\nFROM student GROUP BY dept_id\nHAVING AVG(gpa) >= 3.5;",
-    result:"그룹별로 집계된 결과가 반환됩니다.",
-    caution:["SELECT에는 GROUP BY 컬럼이나 집계함수만","HAVING: 그룹화 후 필터 / WHERE: 그룹화 전 필터"],
-    mistakes:["WHERE절에 집계함수 조건 작성 (HAVING 사용)"] },
-  { id:"primary-key", title:"PRIMARY KEY", cat:"제약조건",
-    def:"테이블의 각 행을 고유하게 식별하는 기본키 제약조건입니다.",
-    easy:"학번이 학생마다 다른 것처럼, PK는 각 행이 구별되도록 고유한 값을 강제합니다.",
-    syntax:"-- 컬럼 수준\n컬럼명 타입 PRIMARY KEY\n\n-- 복합 기본키\nPRIMARY KEY(컬럼1, 컬럼2)",
-    example:"CREATE TABLE student (\n  student_id INT PRIMARY KEY,\n  name VARCHAR(50)\n);\n\n-- 복합\nCREATE TABLE enrollment (\n  student_id INT,\n  course_id VARCHAR(10),\n  PRIMARY KEY(student_id, course_id)\n);",
-    result:"PK 컬럼에는 NULL과 중복 값이 들어올 수 없습니다.",
-    caution:["테이블당 PK는 하나","자동으로 NOT NULL + UNIQUE 적용"],
-    mistakes:["PK 컬럼에 NULL 삽입 시도","하나의 테이블에 PK 두 개 정의"] },
-  { id:"foreign-key", title:"FOREIGN KEY", cat:"제약조건",
-    def:"다른 테이블의 기본키를 참조하여 관계를 정의하는 제약조건입니다.",
-    easy:"수강신청 테이블에서 없는 학생번호로 신청 불가 — FK가 이 규칙을 자동으로 지킵니다.",
-    syntax:"FOREIGN KEY (컬럼명)\n  REFERENCES 참조테이블(참조컬럼)\n  [ON DELETE CASCADE | SET NULL]",
-    example:"CREATE TABLE enrollment (\n  id INT PRIMARY KEY,\n  student_id INT,\n  FOREIGN KEY (student_id)\n    REFERENCES student(student_id)\n    ON DELETE CASCADE\n);",
-    result:"참조 대상에 없는 값은 삽입이 거부됩니다.",
-    caution:["부모 테이블 먼저 생성","FK 컬럼 자체는 NULL 허용"],
-    mistakes:["FOREIGN KEY 뒤 괄호 누락","부모보다 자식 테이블 먼저 생성"] },
-  { id:"not-null", title:"NOT NULL", cat:"제약조건",
-    def:"컬럼에 NULL 값을 허용하지 않는 제약조건입니다.",
-    easy:"회원가입 폼에서 이름 칸이 필수인 것처럼, NOT NULL은 반드시 값이 있어야 합니다.",
-    syntax:"컬럼명 타입 NOT NULL",
-    example:"CREATE TABLE member (\n  id INT PRIMARY KEY,\n  name VARCHAR(50) NOT NULL,\n  email VARCHAR(100) NOT NULL,\n  phone VARCHAR(20)\n);",
-    result:"name, email INSERT 시 반드시 값이 있어야 합니다.",
-    caution:["PRIMARY KEY는 자동으로 NOT NULL","NULL과 빈 문자열('')은 다릅니다"],
-    mistakes:["PK 컬럼에 별도 NOT NULL 명시 (불필요)"] },
-  { id:"unique", title:"UNIQUE", cat:"제약조건",
-    def:"컬럼에 중복 값을 허용하지 않는 제약조건입니다.",
-    easy:"이메일은 하나의 계정에만 등록 가능 — UNIQUE가 이 규칙을 자동으로 강제합니다.",
-    syntax:"컬럼명 타입 UNIQUE\n-- 또는\nUNIQUE(컬럼명)",
-    example:"CREATE TABLE member (\n  id INT PRIMARY KEY,\n  email VARCHAR(100) UNIQUE,\n  username VARCHAR(50) UNIQUE\n);",
-    result:"email, username 컬럼에 같은 값을 두 번 넣으면 오류 발생.",
-    caution:["NULL은 UNIQUE 검사 예외","PK와 달리 하나의 테이블에 여러 개 가능"],
-    mistakes:["UNIQUE와 PRIMARY KEY 역할 혼동"] },
-  { id:"check", title:"CHECK", cat:"제약조건",
-    def:"컬럼에 저장될 수 있는 값의 조건을 제한하는 제약조건입니다.",
-    easy:"나이에 -5나 200이 들어오면 안 되는 것처럼, CHECK는 유효 범위를 설정합니다.",
-    syntax:"컬럼명 타입 CHECK(조건식)",
-    example:"CREATE TABLE student (\n  id INT PRIMARY KEY,\n  age INT CHECK(age >= 18 AND age <= 100),\n  grade CHAR(1) CHECK(grade IN ('A','B','C','D','F'))\n);",
-    result:"조건 위반 시 INSERT/UPDATE가 거부됩니다.",
-    caution:["CHECK 위반 INSERT/UPDATE는 전체 거부"],
-    mistakes:["CHECK 괄호 누락: CHECK age >= 18 → CHECK(age >= 18)"] },
-];
-
-function ConceptsPage({ bp }) {
-  const [selected, setSelected] = useState("select");
-  const [search,   setSearch]   = useState("");
-  const [sideOpen, setSideOpen] = useState(false);
-
-  const c        = CONCEPTS_DATA.find(x => x.id === selected) || CONCEPTS_DATA[0];
-  const filtered = search ? CONCEPTS_DATA.filter(x => x.title.toLowerCase().includes(search.toLowerCase()) || x.cat.includes(search)) : CONCEPTS_DATA;
-  const cats     = ["DML", "제약조건"];
-  const catColor = { DML: C.accent, "제약조건": C.yellow };
-
-  const SidebarContent = () => (
-    <>
-      <div style={{ padding:"10px 10px 0" }}>
-        <input
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="🔍 검색..."
-          style={{
-            width:"100%", padding:"6px 9px", borderRadius:6, border:`1px solid ${C.border}`,
-            fontSize:12.5, fontFamily: C.sans, color: C.text, background: C.bg,
-            outline:"none", boxSizing:"border-box",
-          }}
-        />
-      </div>
-      {cats.map(cat => (
-        <div key={cat} style={{ padding:"10px 10px 4px" }}>
-          <div style={{ fontSize:9.5, fontWeight:700, color: catColor[cat] || C.muted, textTransform:"uppercase", letterSpacing:1, marginBottom:4 }}>{cat}</div>
-          {filtered.filter(x => x.cat === cat).map(x => (
-            <button
-              key={x.id}
-              onClick={() => { setSelected(x.id); setSideOpen(false); }}
-              style={{
-                display:"block", width:"100%", textAlign:"left",
-                padding:"6px 9px", borderRadius:6, border:"none",
-                background: selected === x.id ? C.accentBg : "transparent",
-                color: selected === x.id ? C.accent : C.textSub,
-                cursor:"pointer", fontSize:13, fontFamily: C.sans,
-                fontWeight: selected === x.id ? 600 : 400, marginBottom:1,
-              }}
-            >{x.title}</button>
-          ))}
-        </div>
-      ))}
-    </>
-  );
-
-  return (
-    <div style={{ display:"flex", height: bp.isMobile ? "auto" : "calc(100vh - 50px)", fontFamily: C.sans }}>
-      {/* 데스크톱/태블릿 사이드바 */}
-      {!bp.isMobile && (
-        <div style={{ width:190, borderRight:`1px solid ${C.border}`, overflow:"auto", background: C.surface, flexShrink:0 }}>
-          <SidebarContent />
-        </div>
-      )}
-
-      {/* 모바일: 개념 선택 드롭다운 */}
-      {bp.isMobile && (
-        <div style={{ position:"relative" }}>
+    <header style={{ height: 50, borderBottom: `1px solid ${C.line}`, background: C.panel, display: "flex", alignItems: "center", padding: "0 clamp(10px, 3vw, 18px)", gap: 10, overflow: "hidden" }}>
+      <button onClick={() => setPage("home")} style={{ border: 0, background: "transparent", padding: 0, display: "flex", alignItems: "center", gap: 9, cursor: "pointer", flex: "0 0 auto" }}>
+        <span style={{ width: 28, height: 28, borderRadius: 7, background: C.dark, color: "#fff", display: "grid", placeItems: "center", fontFamily: C.mono, fontWeight: 800, fontSize: 11 }}>SV</span>
+        <span style={{ fontSize: 15, fontWeight: 750, color: C.text }}>SQLVisual</span>
+      </button>
+      <nav style={{ display: "flex", alignItems: "center", gap: 2, flex: "1 1 auto", minWidth: 0, overflowX: "auto", scrollbarWidth: "none" }}>
+        {items.map(([id, label]) => (
           <button
-            onClick={() => setSideOpen(o => !o)}
+            key={id}
+            onClick={() => setPage(id)}
             style={{
-              width:"100%", padding:"10px 16px", border:"none", borderBottom:`1px solid ${C.border}`,
-              background: C.surface, textAlign:"left", fontSize:14, fontFamily: C.sans,
-              cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center",
+              border: 0,
+              borderBottom: page === id ? `2px solid ${C.accent}` : "2px solid transparent",
+              background: page === id ? C.accentSoft : "transparent",
+              color: page === id ? C.accent : C.sub,
+              borderRadius: 7,
+              padding: "7px 11px 6px",
+              cursor: "pointer",
+              fontSize: 13,
+              fontWeight: page === id ? 700 : 500,
+              lineHeight: 1.1,
+              whiteSpace: "nowrap",
+              flex: "0 0 auto",
             }}
           >
-            <span style={{ color: C.accent, fontWeight:600 }}>{c.title}</span>
-            <span style={{ color: C.muted, fontSize:12 }}>{sideOpen ? "▲" : "▼"}</span>
+            {label}
           </button>
-          {sideOpen && (
-            <div style={{
-              position:"absolute", top:"100%", left:0, right:0, background: C.surface,
-              border:`1px solid ${C.border}`, zIndex:50, maxHeight:280, overflow:"auto",
-              boxShadow:"0 8px 24px rgba(0,0,0,.12)",
-            }}>
-              <SidebarContent />
-            </div>
-          )}
+        ))}
+      </nav>
+      {user ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "0 0 auto" }}>
+          <span style={{ fontSize: 12, color: C.sub, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.username || "사용자"}</span>
+          <Button variant="ghost" onClick={onLogout}>로그아웃</Button>
         </div>
+      ) : (
+        <Button variant="primary" onClick={() => setPage("login")}>로그인</Button>
       )}
+    </header>
+  );
+}
 
-      {/* 본문 */}
-      <div style={{ flex:1, overflow:"auto", padding: bp.isMobile ? "18px 16px" : "28px 32px", background: C.bg }}>
-        <div style={{ maxWidth:700 }}>
-          <div style={{ marginBottom:18 }}>
-            <span style={{ fontSize:10, fontWeight:700, color: catColor[c.cat] || C.muted, textTransform:"uppercase", letterSpacing:1 }}>{c.cat}</span>
-            <h1 style={{ margin:"5px 0 7px", fontSize: bp.isMobile ? 21 : 25, fontWeight:800, color: C.text }}>{c.title}</h1>
-            <p style={{ margin:0, fontSize:13.5, color: C.textSub, lineHeight:1.65 }}>{c.def}</p>
+function HomeDashboard({ setPage, loadExample }) {
+  const docs = readJSON(STORAGE.docs, []);
+  const recent = readJSON(STORAGE.recent, []);
+  const favorites = EXAMPLES.filter(item => ["join", "group", "fk", "check"].includes(item.id));
+
+  return (
+    <main style={{ maxWidth: 1180, margin: "0 auto", padding: "28px 22px 44px", display: "grid", gap: 22 }}>
+      <section style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 20 }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ width: 34, height: 34, borderRadius: 8, background: C.dark, color: "#fff", display: "grid", placeItems: "center", fontFamily: C.mono, fontWeight: 800, fontSize: 12 }}>SV</span>
+            <h1 style={{ margin: 0, fontSize: 22, color: C.text, letterSpacing: 0 }}>SQLVisual</h1>
           </div>
-
-          {/* 쉬운 설명 */}
-          <div style={{ background: C.greenBg, border:`1px solid ${C.greenBdr}`, borderRadius:8, padding:"11px 15px", marginBottom:16 }}>
-            <div style={{ fontSize:10.5, fontWeight:700, color: C.green, marginBottom:5 }}>💡 쉬운 설명</div>
-            <div style={{ fontSize:13, color:"#166534", lineHeight:1.7 }}>{c.easy}</div>
-          </div>
-
-          {/* 문법 */}
-          <div style={{ marginBottom:16 }}>
-            <div style={{ fontWeight:600, fontSize:12.5, color: C.text, marginBottom:7 }}>📌 문법</div>
-            <div style={{ background: C.edBg, borderRadius:8, padding:"11px 15px" }}>
-              <pre style={{ margin:0, color: C.edText, fontFamily: C.mono, fontSize:12, lineHeight:1.65, whiteSpace:"pre-wrap" }}>{c.syntax}</pre>
-            </div>
-          </div>
-
-          {/* 예제 */}
-          <div style={{ marginBottom:16 }}>
-            <div style={{ fontWeight:600, fontSize:12.5, color: C.text, marginBottom:7 }}>✏️ 예제</div>
-            <div style={{ background: C.edBg, borderRadius:8, padding:"11px 15px" }}>
-              <pre style={{ margin:0, color: C.edGreen, fontFamily: C.mono, fontSize:12, lineHeight:1.65, whiteSpace:"pre-wrap" }}>{c.example}</pre>
-            </div>
-            {c.result && (
-              <div style={{ marginTop:7, padding:"7px 11px", background: C.accentBg, border:`1px solid ${C.accentBdr}`, borderRadius:6, fontSize:12, color:"#1e40af" }}>
-                📊 {c.result}
-              </div>
-            )}
-          </div>
-
-          {/* 주의사항 */}
-          {c.caution?.length > 0 && (
-            <div style={{ marginBottom:16 }}>
-              <div style={{ fontWeight:600, fontSize:12.5, color: C.text, marginBottom:7 }}>⚠️ 주의사항</div>
-              {c.caution.map((t, i) => (
-                <div key={i} style={{ padding:"7px 11px", background: C.yellowBg, border:`1px solid ${C.yellowBdr}`, borderRadius:6, fontSize:12.5, color:"#92400e", marginBottom:5 }}>• {t}</div>
-              ))}
-            </div>
-          )}
-
-          {/* 자주 하는 실수 */}
-          {c.mistakes?.length > 0 && (
-            <div style={{ marginBottom:16 }}>
-              <div style={{ fontWeight:600, fontSize:12.5, color: C.text, marginBottom:7 }}>❌ 자주 하는 실수</div>
-              {c.mistakes.map((m, i) => (
-                <div key={i} style={{ padding:"7px 11px", background: C.redBg, border:`1px solid ${C.redBdr}`, borderRadius:6, fontSize:12.5, color:"#991b1b", marginBottom:5 }}>• {m}</div>
-              ))}
-            </div>
-          )}
+          <p style={{ margin: "8px 0 0 44px", color: C.sub, fontSize: 13 }}>SQL 실행, 구조 시각화, 자동 해설</p>
         </div>
+        <Button variant="primary" onClick={() => setPage("editor")}>▶ 작업 공간 열기</Button>
+      </section>
+
+      <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))", gap: 16 }}>
+        <Panel title="빠른 시작 예제" action={<Button onClick={() => loadExample(EXAMPLES[0])}>첫 예제 열기</Button>}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 150px), 1fr))", gap: 10 }}>
+            {EXAMPLES.map(item => <ExampleCard key={item.id} item={item} onClick={() => loadExample(item)} />)}
+          </div>
+        </Panel>
+
+        <Panel title="최근 사용 SQL">
+          <ListEmpty show={!recent.length} text="아직 실행 기록이 없습니다." />
+          {recent.slice(0, 5).map((item, idx) => (
+            <button key={`${item.updated_at}-${idx}`} onClick={() => loadExample({ title: item.title || "최근 SQL", sql: item.sql })} style={recentRowStyle}>
+              <span style={{ fontFamily: C.mono, fontSize: 11, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title || firstSqlLine(item.sql)}</span>
+              <span style={{ fontSize: 11, color: C.muted }}>{new Date(item.updated_at).toLocaleString("ko-KR")}</span>
+            </button>
+          ))}
+        </Panel>
+      </section>
+
+      <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: 16 }}>
+        <Panel title="자주 사용하는 SQL 예제">
+          <div style={{ display: "grid", gap: 8 }}>
+            {favorites.map(item => <CompactAction key={item.id} label={item.title} sub={item.desc} onClick={() => loadExample(item)} />)}
+          </div>
+        </Panel>
+        <Panel title="최근 SQL 문서">
+          <ListEmpty show={!docs.length} text="저장된 문서가 없습니다." />
+          {docs.slice(0, 4).map(doc => <CompactAction key={doc.id} label={doc.title} sub={new Date(doc.updated_at).toLocaleString("ko-KR")} onClick={() => loadExample({ title: doc.title, sql: doc.sql_code })} />)}
+        </Panel>
+        <Panel title="SQL 개념 바로가기">
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {CONCEPTS.map(concept => (
+              <button key={concept} onClick={() => setPage("concepts")} style={{ border: `1px solid ${C.line}`, background: C.panelAlt, borderRadius: 999, padding: "6px 10px", color: C.sub, fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
+                {concept}
+              </button>
+            ))}
+          </div>
+        </Panel>
+      </section>
+    </main>
+  );
+}
+
+function Panel({ title, action, children }) {
+  return (
+    <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, overflow: "hidden" }}>
+      <div style={{ height: 44, borderBottom: `1px solid ${C.lineSoft}`, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 14px" }}>
+        <h2 style={{ margin: 0, fontSize: 13, color: C.text }}>{title}</h2>
+        {action}
+      </div>
+      <div style={{ padding: 14 }}>{children}</div>
+    </section>
+  );
+}
+
+function ExampleCard({ item, onClick }) {
+  return (
+    <button onClick={onClick} style={{ textAlign: "left", border: `1px solid ${C.line}`, background: C.panelAlt, borderRadius: 8, padding: 12, cursor: "pointer", minHeight: 86 }}>
+      <span style={{ fontSize: 10, color: C.accent, fontWeight: 800, textTransform: "uppercase" }}>{item.type}</span>
+      <strong style={{ display: "block", marginTop: 7, fontSize: 13, color: C.text, fontFamily: C.mono }}>{item.title}</strong>
+      <span style={{ display: "block", marginTop: 5, fontSize: 12, color: C.sub }}>{item.desc}</span>
+    </button>
+  );
+}
+
+function CompactAction({ label, sub, onClick }) {
+  return (
+    <button onClick={onClick} style={recentRowStyle}>
+      <span style={{ fontSize: 13, color: C.text, fontWeight: 650 }}>{label}</span>
+      <span style={{ fontSize: 11, color: C.muted }}>{sub}</span>
+    </button>
+  );
+}
+
+const recentRowStyle = {
+  width: "100%",
+  display: "grid",
+  gap: 3,
+  textAlign: "left",
+  border: `1px solid ${C.lineSoft}`,
+  background: C.panelAlt,
+  borderRadius: 8,
+  padding: "10px 11px",
+  cursor: "pointer",
+  marginBottom: 8,
+};
+
+function ListEmpty({ show, text }) {
+  if (!show) return null;
+  return <div style={{ padding: "18px 8px", color: C.muted, fontSize: 12, textAlign: "center" }}>{text}</div>;
+}
+
+function Workspace({ initialRequest }) {
+  const [sql, setSql] = useState(DEFAULT_SQL);
+  const [docTitle, setDocTitle] = useState("Untitled query");
+  const [docId, setDocId] = useState(null);
+  const [sqlDb, setSqlDb] = useState(null);
+  const [dbReady, setDbReady] = useState(false);
+  const [outputs, setOutputs] = useState([]);
+  const [schemas, setSchemas] = useState([]);
+  const [elapsed, setElapsed] = useState(null);
+  const [activeTab, setActiveTab] = useState("result");
+  const [showExamples, setShowExamples] = useState(false);
+  const [showDocs, setShowDocs] = useState(false);
+  const [consumedRequestId, setConsumedRequestId] = useState(null);
+  const runRef = useRef(null);
+
+  useEffect(() => {
+    loadSqlJsRuntime()
+      .then(initSqlJs => initSqlJs({ locateFile: file => file.endsWith(".wasm") ? sqlWasmUrl : file }))
+      .then(SQL => {
+        setSqlDb(new SQL.Database());
+        setDbReady(true);
+      })
+      .catch(() => setDbReady(false));
+  }, []);
+
+  useEffect(() => {
+    if (initialRequest && initialRequest.id !== consumedRequestId) {
+      setSql(initialRequest.sql);
+      setDocTitle(initialRequest.title || "Example query");
+      setDocId(null);
+      setOutputs([]);
+      setElapsed(null);
+      setActiveTab("result");
+      setConsumedRequestId(initialRequest.id);
+    }
+  }, [initialRequest, consumedRequestId]);
+
+  const explanation = useMemo(() => explainDetailedSQL(sql), [sql]);
+  const rowCount = outputs.reduce((sum, out) => sum + (out.type === "table" ? out.data.values.length : 0), 0);
+  const errorCount = outputs.filter(out => out.type === "error").length;
+
+  const runSql = useCallback(() => {
+    const clean = sql.split("\n").filter(line => !line.trim().startsWith("--")).join("\n");
+    const statements = splitStatements(clean);
+    const nextOutputs = [];
+    const nextSchemas = [...schemas];
+    const start = performance.now();
+
+    for (const stmt of statements) {
+      if (!stmt.trim()) continue;
+
+      try {
+        const schema = /CREATE\s+TABLE/i.test(stmt) ? parseCreateTable(stmt) : null;
+        if (schema) upsertSchema(nextSchemas, schema);
+
+        if (!sqlDb) {
+          nextOutputs.push({ type: "ok", label: "해설 준비", stmt });
+          continue;
+        }
+
+        const results = sqlDb.exec(stmt);
+        if (results.length > 0) nextOutputs.push({ type: "table", label: "SELECT 결과", stmt, data: results[0] });
+        else nextOutputs.push({ type: "ok", label: schema ? "구조 분석 완료" : "실행 완료", stmt });
+      } catch (err) {
+        nextOutputs.push({ type: "error", label: "오류", stmt, err: analyzeError(stmt, err.message) });
+      }
+    }
+
+    const ms = Math.round(performance.now() - start);
+    setOutputs(nextOutputs);
+    setSchemas(nextSchemas);
+    setElapsed(ms);
+    setActiveTab(nextOutputs.some(out => out.type === "error") ? "error" : "result");
+    addRecentSql(docTitle, sql);
+  }, [docTitle, schemas, sql, sqlDb]);
+
+  useEffect(() => {
+    runRef.current = runSql;
+  }, [runSql]);
+
+  useEffect(() => {
+    const handler = event => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        runRef.current?.();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  const saveDoc = () => {
+    const docs = readJSON(STORAGE.docs, []);
+    const now = new Date().toISOString();
+    if (docId) {
+      const idx = docs.findIndex(doc => doc.id === docId);
+      if (idx >= 0) docs[idx] = { ...docs[idx], title: docTitle, sql_code: sql, updated_at: now };
+      else docs.unshift({ id: docId, title: docTitle, sql_code: sql, created_at: now, updated_at: now });
+    } else {
+      const id = String(Date.now());
+      docs.unshift({ id, title: docTitle, sql_code: sql, created_at: now, updated_at: now });
+      setDocId(id);
+    }
+    writeJSON(STORAGE.docs, docs);
+  };
+
+  const loadDoc = doc => {
+    setDocId(doc.id);
+    setDocTitle(doc.title);
+    setSql(doc.sql_code);
+    setShowDocs(false);
+    setActiveTab("result");
+  };
+
+  const resetWorkspace = () => {
+    setSql("");
+    setOutputs([]);
+    setSchemas([]);
+    setElapsed(null);
+    setDocId(null);
+    setDocTitle("Untitled query");
+  };
+
+  return (
+    <main style={{ height: "calc(100vh - 50px)", display: "flex", flexDirection: "column", background: C.bg }}>
+      <Toolbar
+        dbReady={dbReady}
+        docTitle={docTitle}
+        setDocTitle={setDocTitle}
+        onRun={runSql}
+        onSave={saveDoc}
+        onLoad={() => setShowDocs(true)}
+        onReset={resetWorkspace}
+        onSchema={() => setActiveTab("schema")}
+        onExamples={() => setShowExamples(true)}
+        onClearResults={() => setOutputs([])}
+        elapsed={elapsed}
+        rowCount={rowCount}
+        errorCount={errorCount}
+      />
+
+      <section style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", padding: 14, gap: 12 }}>
+        <div style={{ flex: "1 1 58%", minHeight: 280, border: `1px solid ${C.darkLine}`, borderRadius: 9, overflow: "hidden", background: C.dark }}>
+          <Editor
+            height="100%"
+            language="sql"
+            theme="vs-dark"
+            value={sql}
+            onChange={value => setSql(value || "")}
+            options={{
+              minimap: { enabled: false },
+              fontFamily: C.mono,
+              fontSize: 14,
+              lineHeight: 22,
+              wordWrap: "on",
+              scrollBeyondLastLine: false,
+              padding: { top: 14, bottom: 14 },
+              automaticLayout: true,
+            }}
+          />
+        </div>
+
+        <BottomPanel
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          outputs={outputs}
+          explanation={explanation}
+          schemas={schemas}
+          elapsed={elapsed}
+          rowCount={rowCount}
+        />
+      </section>
+
+      <ExampleModal open={showExamples} onClose={() => setShowExamples(false)} onPick={item => { setSql(item.sql); setDocTitle(item.title); setShowExamples(false); }} />
+      <DocsModal open={showDocs} onClose={() => setShowDocs(false)} onLoad={loadDoc} />
+    </main>
+  );
+}
+
+function Toolbar({ dbReady, docTitle, setDocTitle, onRun, onSave, onLoad, onReset, onSchema, onExamples, onClearResults, elapsed, rowCount, errorCount }) {
+  return (
+    <div style={{ height: 50, borderBottom: `1px solid ${C.line}`, background: C.panel, display: "flex", alignItems: "center", gap: 8, padding: "0 14px", overflowX: "auto", overflowY: "hidden", scrollbarWidth: "thin" }}>
+      <input
+        value={docTitle}
+        onChange={event => setDocTitle(event.target.value)}
+        style={{ flex: "0 0 190px", width: 190, height: 30, border: `1px solid ${C.line}`, borderRadius: 7, padding: "0 10px", fontSize: 12, color: C.text, background: C.panelAlt, outline: "none" }}
+      />
+      <Button variant="primary" onClick={onRun}>▶ 실행</Button>
+      <Button onClick={onSave}>💾 저장</Button>
+      <Button onClick={onLoad}>📂 불러오기</Button>
+      <Button onClick={onReset}>🗑 초기화</Button>
+      <Button onClick={onSchema}>🗂 구조 보기</Button>
+      <Button onClick={onExamples}>📋 예제 삽입</Button>
+      <Button onClick={onClearResults}>결과 지우기</Button>
+      <div style={{ flex: "1 0 12px" }} />
+      <Metric label="DB" value={dbReady ? "ready" : "loading"} tone={dbReady ? "success" : "warn"} />
+      <Metric label="time" value={elapsed == null ? "-" : `${elapsed}ms`} />
+      <Metric label="rows" value={rowCount} />
+      <Metric label="errors" value={errorCount} tone={errorCount ? "danger" : "default"} />
+    </div>
+  );
+}
+
+function Metric({ label, value, tone = "default" }) {
+  const colors = {
+    default: [C.panelAlt, C.sub],
+    success: ["#ecfdf5", C.success],
+    warn: ["#fffbeb", C.warn],
+    danger: ["#fef2f2", C.danger],
+  };
+  return (
+    <span style={{ flex: "0 0 auto", height: 28, display: "inline-flex", alignItems: "center", gap: 6, border: `1px solid ${C.lineSoft}`, borderRadius: 999, padding: "0 9px", background: colors[tone][0], color: colors[tone][1], fontSize: 11, fontFamily: C.mono }}>
+      <b style={{ color: C.muted, fontWeight: 600 }}>{label}</b>{value}
+    </span>
+  );
+}
+
+function BottomPanel({ activeTab, setActiveTab, outputs, explanation, schemas, elapsed, rowCount }) {
+  const tabs = [
+    ["result", "결과"],
+    ["explain", "해설"],
+    ["error", "에러"],
+    ["schema", "구조 시각화"],
+  ];
+  return (
+    <div style={{ flex: "0 0 36%", minHeight: 245, border: `1px solid ${C.line}`, borderRadius: 9, overflow: "hidden", background: C.panel, display: "flex", flexDirection: "column" }}>
+      <div style={{ height: 38, display: "flex", alignItems: "center", borderBottom: `1px solid ${C.line}`, background: C.panelAlt }}>
+        {tabs.map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setActiveTab(id)}
+            style={{
+              height: "100%",
+              padding: "0 14px",
+              border: 0,
+              borderRight: `1px solid ${C.lineSoft}`,
+              borderBottom: activeTab === id ? `2px solid ${C.accent}` : "2px solid transparent",
+              background: activeTab === id ? C.panel : "transparent",
+              color: activeTab === id ? C.text : C.sub,
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
+            {label}
+          </button>
+        ))}
+        <span style={{ marginLeft: "auto", marginRight: 12, color: C.muted, fontSize: 11, fontFamily: C.mono }}>
+          {elapsed == null ? "not executed" : `${elapsed}ms · ${rowCount} rows`}
+        </span>
+      </div>
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        {activeTab === "result" && <ResultView outputs={outputs} />}
+        {activeTab === "explain" && <ExplainView explanation={explanation} />}
+        {activeTab === "error" && <ErrorView outputs={outputs} />}
+        {activeTab === "schema" && <SchemaView schemas={schemas} />}
       </div>
     </div>
   );
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 내 문서 페이지 — 로컬 저장 기반
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function DocsPage({ user, setPage, bp, onOpenDoc }) {
-  const [docs,      setDocs]      = useState([]);
-  const [editId,    setEditId]    = useState(null);
-  const [editTitle, setEditTitle] = useState("");
+function ResultView({ outputs }) {
+  if (!outputs.length) return <EmptyState title="아직 실행된 SQL이 없습니다" text="상단 에디터에서 SQL을 작성한 뒤 실행하세요. Ctrl+Enter도 사용할 수 있습니다." />;
+  return (
+    <div style={{ padding: 12, display: "grid", gap: 12 }}>
+      {outputs.filter(out => out.type !== "error").map((out, idx) => (
+        <div key={idx} style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 8, overflow: "hidden" }}>
+          <div style={{ height: 32, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 10px", background: C.panelAlt, borderBottom: `1px solid ${C.lineSoft}` }}>
+            <b style={{ color: out.type === "table" ? C.accent : C.success, fontSize: 12 }}>{out.label}</b>
+            <code style={{ color: C.muted, fontSize: 10 }}>{out.stmt.replace(/\s+/g, " ").slice(0, 90)}</code>
+          </div>
+          {out.type === "table" ? <TableResult data={out.data} /> : <div style={{ padding: 12, color: C.sub, fontSize: 12 }}>실행이 완료되었습니다.</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
 
-  const reload = () => setDocs(JSON.parse(localStorage.getItem("sv_docs") || "[]"));
-  useEffect(() => reload(), []);
+function TableResult({ data }) {
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: C.mono, fontSize: 12 }}>
+        <thead>
+          <tr>{data.columns.map(col => <th key={col} style={{ textAlign: "left", padding: "8px 10px", background: "#f3f6fb", color: C.text, borderBottom: `1px solid ${C.line}` }}>{col}</th>)}</tr>
+        </thead>
+        <tbody>
+          {data.values.map((row, idx) => (
+            <tr key={idx}>
+              {row.map((cell, cellIdx) => <td key={cellIdx} style={{ padding: "7px 10px", borderBottom: `1px solid ${C.lineSoft}`, color: cell == null ? C.muted : C.text }}>{cell == null ? "NULL" : String(cell)}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
-  const del = id => {
-    if (!window.confirm("삭제하시겠습니까?")) return;
-    const d = JSON.parse(localStorage.getItem("sv_docs") || "[]").filter(x => x.id !== id);
-    localStorage.setItem("sv_docs", JSON.stringify(d));
-    reload();
+function ExplainView({ explanation }) {
+  const blocks = [
+    ["한 줄 요약", [explanation.summary]],
+    ["단계별 설명", explanation.steps],
+    ["실무 팁", explanation.tips],
+    ["주의사항", explanation.cautions],
+  ];
+  return (
+    <div style={{ padding: 16, display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+      {blocks.map(([title, items]) => (
+        <section key={title} style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 8, padding: 13, background: C.panelAlt }}>
+          <h3 style={{ margin: "0 0 9px", fontSize: 12, color: C.text }}>{title}</h3>
+          {items?.length ? (
+            <ul style={{ margin: 0, paddingLeft: 18, color: C.sub, fontSize: 12, lineHeight: 1.7 }}>
+              {items.map((item, idx) => <li key={idx}>{item}</li>)}
+            </ul>
+          ) : <p style={{ margin: 0, color: C.muted, fontSize: 12 }}>특별한 항목이 없습니다.</p>}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function ErrorView({ outputs }) {
+  const errors = outputs.filter(out => out.type === "error");
+  if (!errors.length) return <EmptyState title="에러가 없습니다" text="SQL 실행 중 오류가 발생하면 이 탭에서 원인과 해결 힌트를 확인할 수 있습니다." />;
+  return (
+    <div style={{ padding: 12, display: "grid", gap: 10 }}>
+      {errors.map((out, idx) => (
+        <section key={idx} style={{ border: "1px solid #fecaca", background: "#fff7f7", borderRadius: 8, padding: 13 }}>
+          <h3 style={{ margin: "0 0 7px", color: C.danger, fontSize: 13 }}>{out.err.title}</h3>
+          <div style={{ color: C.text, fontSize: 12, lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: out.err.msg }} />
+          <p style={{ margin: "8px 0 0", color: C.sub, fontSize: 12 }}>{out.err.hint}</p>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function SchemaView({ schemas }) {
+  if (!schemas.length) return <EmptyState title="분석된 테이블 구조가 없습니다" text="CREATE TABLE 문을 실행하면 컬럼, 타입, 키, 관계가 이곳에 표시됩니다." />;
+  return (
+    <div style={{ padding: 14, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 14 }}>
+      {schemas.map(schema => (
+        <section key={schema.tableName} style={{ border: `1px solid ${C.line}`, borderRadius: 9, background: C.panel, overflow: "hidden" }}>
+          <div style={{ height: 36, display: "flex", alignItems: "center", padding: "0 12px", background: C.dark, color: "#fff", fontFamily: C.mono, fontSize: 12, fontWeight: 700 }}>{schema.tableName}</div>
+          <div style={{ display: "grid" }}>
+            {schema.columns.map(col => (
+              <div key={col.name} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, padding: "9px 12px", borderBottom: `1px solid ${C.lineSoft}` }}>
+                <div>
+                  <span style={{ fontFamily: C.mono, fontSize: 12, color: C.text }}>{col.name}</span>
+                  <span style={{ marginLeft: 8, fontFamily: C.mono, fontSize: 11, color: C.muted }}>{col.type}</span>
+                </div>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {col.pk && <Badge text="PK" tone="warn" />}
+                  {col.fk && <Badge text="FK" tone="accent" />}
+                  {col.notNull && <Badge text="NN" />}
+                  {col.unique && <Badge text="UQ" tone="success" />}
+                  {col.check && <Badge text="CHK" tone="accent" />}
+                </div>
+                {col.fk && <div style={{ gridColumn: "1 / -1", color: C.accent, fontSize: 11 }}>→ {col.refTable}({col.refColumn})</div>}
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function Badge({ text, tone = "default" }) {
+  const tones = {
+    default: ["#f3f4f6", C.sub],
+    accent: [C.accentSoft, C.accent],
+    success: ["#ecfdf5", C.success],
+    warn: ["#fffbeb", C.warn],
+  };
+  return <span style={{ background: tones[tone][0], color: tones[tone][1], borderRadius: 5, padding: "2px 5px", fontSize: 10, fontWeight: 800 }}>{text}</span>;
+}
+
+function EmptyState({ title, text }) {
+  return (
+    <div style={{ height: "100%", minHeight: 180, display: "grid", placeItems: "center", textAlign: "center", padding: 24 }}>
+      <div>
+        <h3 style={{ margin: 0, color: C.text, fontSize: 14 }}>{title}</h3>
+        <p style={{ margin: "8px auto 0", color: C.muted, fontSize: 12, maxWidth: 420, lineHeight: 1.6 }}>{text}</p>
+      </div>
+    </div>
+  );
+}
+
+function ExampleModal({ open, onClose, onPick }) {
+  if (!open) return null;
+  return (
+    <Modal title="예제 삽입" onClose={onClose} wide>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
+        {EXAMPLES.map(item => <ExampleCard key={item.id} item={item} onClick={() => onPick(item)} />)}
+      </div>
+    </Modal>
+  );
+}
+
+function DocsModal({ open, onClose, onLoad }) {
+  const docs = readJSON(STORAGE.docs, []);
+  if (!open) return null;
+  return (
+    <Modal title="문서 불러오기" onClose={onClose}>
+      <ListEmpty show={!docs.length} text="저장된 문서가 없습니다." />
+      {docs.map(doc => <CompactAction key={doc.id} label={doc.title} sub={new Date(doc.updated_at).toLocaleString("ko-KR")} onClick={() => onLoad(doc)} />)}
+    </Modal>
+  );
+}
+
+function Modal({ title, onClose, children, wide }) {
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.45)", zIndex: 1000, display: "grid", placeItems: "center", padding: 18 }}>
+      <section onClick={event => event.stopPropagation()} style={{ width: "100%", maxWidth: wide ? 840 : 520, maxHeight: "86vh", overflow: "auto", background: C.panel, borderRadius: 10, border: `1px solid ${C.line}`, boxShadow: "0 18px 48px rgba(15,23,42,.18)" }}>
+        <header style={{ height: 46, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 14px", borderBottom: `1px solid ${C.line}` }}>
+          <h2 style={{ margin: 0, fontSize: 14, color: C.text }}>{title}</h2>
+          <button onClick={onClose} style={{ border: 0, background: "transparent", color: C.muted, cursor: "pointer", fontSize: 20 }}>×</button>
+        </header>
+        <div style={{ padding: 14 }}>{children}</div>
+      </section>
+    </div>
+  );
+}
+
+function DocsPage({ setPage, loadExample }) {
+  const [docs, setDocs] = useState(() => readJSON(STORAGE.docs, []));
+  const removeDoc = id => {
+    const next = docs.filter(doc => doc.id !== id);
+    setDocs(next);
+    writeJSON(STORAGE.docs, next);
+  };
+  return (
+    <main style={{ maxWidth: 900, margin: "0 auto", padding: 24 }}>
+      <Panel title="문서">
+        <ListEmpty show={!docs.length} text="저장된 문서가 없습니다." />
+        {docs.map(doc => (
+          <div key={doc.id} style={{ display: "flex", alignItems: "center", gap: 10, border: `1px solid ${C.lineSoft}`, borderRadius: 8, padding: 12, marginBottom: 8, background: C.panelAlt }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <b style={{ color: C.text, fontSize: 13 }}>{doc.title}</b>
+              <div style={{ color: C.muted, fontSize: 11, marginTop: 3 }}>{new Date(doc.updated_at).toLocaleString("ko-KR")}</div>
+            </div>
+            <Button variant="primary" onClick={() => { loadExample({ title: doc.title, sql: doc.sql_code }); setPage("editor"); }}>열기</Button>
+            <Button variant="danger" onClick={() => removeDoc(doc.id)}>삭제</Button>
+          </div>
+        ))}
+      </Panel>
+    </main>
+  );
+}
+
+function ConceptsPage({ loadExample }) {
+  const [activeGroup, setActiveGroup] = useState(SQL_REFERENCE[0].id);
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const groups = SQL_REFERENCE
+    .map(group => ({
+      ...group,
+      items: group.items.filter(item => !q || `${group.title} ${item.name} ${item.summary} ${item.example}`.toLowerCase().includes(q)),
+    }))
+    .filter(group => !q || group.items.length);
+  const visibleGroups = q ? groups : SQL_REFERENCE.filter(group => group.id === activeGroup);
+
+  return (
+    <main style={{ maxWidth: 1180, margin: "0 auto", padding: "24px 20px 46px", display: "grid", gap: 16 }}>
+      <section style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 22, letterSpacing: 0 }}>SQL Reference</h1>
+          <p style={{ margin: "8px 0 0", color: C.sub, fontSize: 13 }}>Java API 문서처럼 개념, 문법, 예시, 실무 포인트를 빠르게 찾는 SQL 레퍼런스입니다.</p>
+        </div>
+        <input
+          value={query}
+          onChange={event => setQuery(event.target.value)}
+          placeholder="SELECT, JOIN, INDEX 검색"
+          style={{ width: "min(100%, 320px)", height: 34, border: `1px solid ${C.line}`, borderRadius: 8, padding: "0 12px", background: C.panel, outline: "none", fontSize: 13 }}
+        />
+      </section>
+
+      <section style={{ display: "grid", gridTemplateColumns: "minmax(190px, .28fr) minmax(0, 1fr)", gap: 16 }}>
+        <aside style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, overflow: "hidden", alignSelf: "start", position: "sticky", top: 64 }}>
+          <div style={{ padding: "11px 12px", borderBottom: `1px solid ${C.lineSoft}`, fontSize: 12, color: C.muted, fontFamily: C.mono }}>packages</div>
+          {SQL_REFERENCE.map(group => (
+            <button
+              key={group.id}
+              onClick={() => { setActiveGroup(group.id); setQuery(""); }}
+              style={{
+                width: "100%",
+                border: 0,
+                borderBottom: `1px solid ${C.lineSoft}`,
+                background: activeGroup === group.id && !q ? C.accentSoft : C.panel,
+                color: activeGroup === group.id && !q ? C.accent : C.text,
+                padding: "11px 12px",
+                textAlign: "left",
+                cursor: "pointer",
+              }}
+            >
+              <b style={{ display: "block", fontSize: 13 }}>{group.title}</b>
+              <span style={{ display: "block", marginTop: 3, fontSize: 11, color: C.muted }}>{group.items.length} concepts</span>
+            </button>
+          ))}
+        </aside>
+
+        <div style={{ display: "grid", gap: 14 }}>
+          {visibleGroups.map(group => (
+            <section key={group.id} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, overflow: "hidden" }}>
+              <div style={{ padding: 16, borderBottom: `1px solid ${C.lineSoft}` }}>
+                <h2 style={{ margin: 0, fontSize: 17 }}>{group.title}</h2>
+                <p style={{ margin: "7px 0 0", color: C.sub, fontSize: 13, lineHeight: 1.55 }}>{group.desc}</p>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))", gap: 12, padding: 14 }}>
+                {group.items.map(item => {
+                  const runnable = EXAMPLES.find(example => example.title === item.name || item.name.includes(example.title));
+                  return (
+                    <article key={item.name} style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 9, background: C.panelAlt, overflow: "hidden" }}>
+                      <div style={{ padding: 13, borderBottom: `1px solid ${C.lineSoft}` }}>
+                        <strong style={{ fontFamily: C.mono, fontSize: 14, color: C.text }}>{item.name}</strong>
+                        <p style={{ margin: "8px 0 0", color: C.sub, fontSize: 12, lineHeight: 1.55 }}>{item.summary}</p>
+                      </div>
+                      <div style={{ padding: 13, display: "grid", gap: 10 }}>
+                        <code style={{ display: "block", whiteSpace: "pre-wrap", fontFamily: C.mono, color: C.text, background: C.panel, border: `1px solid ${C.lineSoft}`, borderRadius: 7, padding: 10, fontSize: 11 }}>{item.syntax}</code>
+                        <code style={{ display: "block", whiteSpace: "pre-wrap", fontFamily: C.mono, color: C.accent, background: "#f8fbff", border: `1px solid ${C.lineSoft}`, borderRadius: 7, padding: 10, fontSize: 11 }}>{item.example}</code>
+                        <ul style={{ margin: 0, paddingLeft: 18, color: C.sub, fontSize: 12, lineHeight: 1.6 }}>
+                          {item.notes.map(note => <li key={note}>{note}</li>)}
+                        </ul>
+                        {runnable && <Button onClick={() => loadExample(runnable)} style={{ justifySelf: "start" }}>예제로 열기</Button>}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function VisualizerPage({ loadExample }) {
+  const [mode, setMode] = useState("erd");
+  const modes = [
+    ["erd", "ERD"],
+    ["flow", "쿼리 흐름"],
+    ["join", "JOIN 그림"],
+    ["constraint", "제약조건"],
+  ];
+
+  return (
+    <main style={{ maxWidth: 1180, margin: "0 auto", padding: "24px 20px 46px", display: "grid", gap: 16 }}>
+      <section style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 14, flexWrap: "wrap" }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 22, letterSpacing: 0 }}>SQL 구조 시각화</h1>
+          <p style={{ margin: "8px 0 0", color: C.sub, fontSize: 13 }}>SQL 작성 화면과 분리된 그림식 이해 화면입니다. 테이블 관계, 실행 흐름, 조인 범위를 눈으로 확인합니다.</p>
+        </div>
+        <div style={{ display: "flex", gap: 6, padding: 4, border: `1px solid ${C.line}`, borderRadius: 9, background: C.panel }}>
+          {modes.map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setMode(id)}
+              style={{ border: 0, borderRadius: 7, background: mode === id ? C.dark : "transparent", color: mode === id ? "#fff" : C.sub, height: 30, padding: "0 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {mode === "erd" && <ErdVisual loadExample={loadExample} />}
+      {mode === "flow" && <QueryFlowVisual loadExample={loadExample} />}
+      {mode === "join" && <JoinVisual loadExample={loadExample} />}
+      {mode === "constraint" && <ConstraintVisual loadExample={loadExample} />}
+    </main>
+  );
+}
+
+function ErdVisual({ loadExample }) {
+  return (
+    <Panel title="테이블 관계도">
+      <div style={{ overflowX: "auto" }}>
+        <div style={{ position: "relative", minWidth: 860, height: 470, background: "#f8fafc", border: `1px solid ${C.lineSoft}`, borderRadius: 9 }}>
+          <svg width="860" height="470" style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
+            <line x1="260" y1="118" x2="360" y2="118" stroke={C.accent} strokeWidth="2" />
+            <line x1="520" y1="208" x2="392" y2="258" stroke={C.accent} strokeWidth="2" />
+            <line x1="612" y1="330" x2="392" y2="330" stroke={C.accent} strokeWidth="2" />
+            <line x1="704" y1="250" x2="520" y2="148" stroke={C.warn} strokeWidth="2" strokeDasharray="6 5" />
+            <text x="286" y="108" fill={C.accent} fontSize="11" fontFamily={C.mono}>1:N</text>
+            <text x="436" y="247" fill={C.accent} fontSize="11" fontFamily={C.mono}>student_id</text>
+            <text x="460" y="349" fill={C.accent} fontSize="11" fontFamily={C.mono}>course_id</text>
+          </svg>
+          {VISUAL_TABLES.map(table => <VisualTable key={table.name} table={table} />)}
+        </div>
+      </div>
+      <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", color: C.sub, fontSize: 12 }}>
+        <span>department → student → enrollment → course 관계를 테이블 카드와 선으로 표현합니다.</span>
+        <Button onClick={() => loadExample(EXAMPLES.find(item => item.id === "fk"))}>FOREIGN KEY 예제로 열기</Button>
+      </div>
+    </Panel>
+  );
+}
+
+function VisualTable({ table }) {
+  return (
+    <section style={{ position: "absolute", left: table.x, top: table.y, width: 224, border: `1px solid ${C.darkLine}`, borderRadius: 9, overflow: "hidden", background: C.panel, boxShadow: "0 10px 28px rgba(15,23,42,.08)" }}>
+      <div style={{ background: C.dark, color: "#fff", padding: "10px 12px", fontFamily: C.mono, fontSize: 13, fontWeight: 800 }}>{table.name}</div>
+      {table.columns.map(([name, type, tag]) => (
+        <div key={name} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, padding: "9px 12px", borderTop: `1px solid ${C.lineSoft}`, alignItems: "center" }}>
+          <span style={{ fontFamily: C.mono, fontSize: 12, color: C.text }}>{name} <em style={{ color: C.muted, fontStyle: "normal" }}>{type}</em></span>
+          {tag && <Badge tone={tag === "PK" ? "warn" : tag === "FK" ? "accent" : "default"}>{tag}</Badge>}
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function QueryFlowVisual({ loadExample }) {
+  return (
+    <Panel title="SELECT 처리 흐름">
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
+        {QUERY_FLOW.map(([label, desc], idx) => (
+          <div key={label} style={{ border: `1px solid ${C.line}`, background: C.panelAlt, borderRadius: 9, padding: 13, minHeight: 98 }}>
+            <span style={{ fontFamily: C.mono, color: C.accent, fontSize: 11, fontWeight: 900 }}>{String(idx + 1).padStart(2, "0")}</span>
+            <strong style={{ display: "block", marginTop: 8, fontFamily: C.mono, fontSize: 14 }}>{label}</strong>
+            <p style={{ margin: "7px 0 0", color: C.sub, fontSize: 12, lineHeight: 1.45 }}>{desc}</p>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 14, padding: 14, border: `1px solid ${C.lineSoft}`, borderRadius: 9, background: "#fbfdff" }}>
+        <code style={{ whiteSpace: "pre-wrap", fontFamily: C.mono, color: C.text, fontSize: 12 }}>{`SELECT d.name, AVG(s.gpa)
+FROM student s
+JOIN department d ON s.dept_id = d.dept_id
+WHERE s.gpa >= 3.5
+GROUP BY d.name
+ORDER BY AVG(s.gpa) DESC;`}</code>
+      </div>
+      <Button onClick={() => loadExample(EXAMPLES.find(item => item.id === "join"))} style={{ marginTop: 12 }}>JOIN 예제로 열기</Button>
+    </Panel>
+  );
+}
+
+function JoinVisual({ loadExample }) {
+  return (
+    <Panel title="JOIN 범위 그림">
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 12 }}>
+        {JOIN_TYPES.map(([title, subtitle, desc], idx) => (
+          <section key={title} style={{ border: `1px solid ${C.line}`, borderRadius: 10, background: C.panelAlt, padding: 15 }}>
+            <div style={{ position: "relative", height: 150 }}>
+              <div style={{ position: "absolute", left: "16%", top: 20, width: 116, height: 116, borderRadius: "50%", background: idx === 1 ? "rgba(37,99,235,.26)" : "rgba(37,99,235,.15)", border: `2px solid ${C.accent}` }} />
+              <div style={{ position: "absolute", right: "16%", top: 20, width: 116, height: 116, borderRadius: "50%", background: idx === 0 ? "rgba(21,128,61,.24)" : idx === 2 ? "rgba(21,128,61,.16)" : "rgba(21,128,61,.08)", border: `2px solid ${C.success}` }} />
+              <div style={{ position: "absolute", left: "50%", top: 55, transform: "translateX(-50%)", borderRadius: 999, background: idx === 0 ? C.dark : C.panel, color: idx === 0 ? "#fff" : C.text, border: `1px solid ${C.line}`, padding: "8px 12px", fontFamily: C.mono, fontSize: 12 }}>{title}</div>
+            </div>
+            <strong style={{ display: "block", fontSize: 14 }}>{subtitle}</strong>
+            <p style={{ margin: "7px 0 0", color: C.sub, fontSize: 12, lineHeight: 1.5 }}>{desc}</p>
+          </section>
+        ))}
+      </div>
+      <Button onClick={() => loadExample(EXAMPLES.find(item => item.id === "join"))} style={{ marginTop: 12 }}>JOIN SQL 작성하기</Button>
+    </Panel>
+  );
+}
+
+function ConstraintVisual({ loadExample }) {
+  return (
+    <Panel title="INSERT 검증 파이프라인">
+      <div style={{ display: "grid", gap: 10 }}>
+        {CONSTRAINT_STEPS.map(([title, desc], idx) => (
+          <div key={title} style={{ display: "grid", gridTemplateColumns: "44px minmax(0, 1fr)", gap: 12, alignItems: "center" }}>
+            <span style={{ width: 34, height: 34, borderRadius: 999, display: "grid", placeItems: "center", background: idx === CONSTRAINT_STEPS.length - 1 ? "#ecfdf5" : C.accentSoft, color: idx === CONSTRAINT_STEPS.length - 1 ? C.success : C.accent, fontFamily: C.mono, fontWeight: 900, fontSize: 12 }}>{idx + 1}</span>
+            <div style={{ border: `1px solid ${C.line}`, borderRadius: 9, background: C.panelAlt, padding: "11px 13px" }}>
+              <strong style={{ fontFamily: C.mono, fontSize: 13 }}>{title}</strong>
+              <span style={{ marginLeft: 10, color: C.sub, fontSize: 12 }}>{desc}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <Button onClick={() => loadExample(EXAMPLES.find(item => item.id === "check"))}>CHECK 예제</Button>
+        <Button onClick={() => loadExample(EXAMPLES.find(item => item.id === "notnull"))}>NOT NULL 예제</Button>
+        <Button onClick={() => loadExample(EXAMPLES.find(item => item.id === "pk"))}>PRIMARY KEY 예제</Button>
+      </div>
+    </Panel>
+  );
+}
+
+function LoginPage({ onLogin, authMessage }) {
+  const [message, setMessage] = useState(authMessage || "");
+  const [apiStatus, setApiStatus] = useState(hasApiBase() ? "checking" : "not-configured");
+
+  useEffect(() => {
+    setMessage(authMessage || "");
+  }, [authMessage]);
+
+  useEffect(() => {
+    if (!hasApiBase()) return;
+    let alive = true;
+    api.health()
+      .then(data => { if (alive) setApiStatus(data.naverConfigured ? "online" : "missing-oauth"); })
+      .catch(() => { if (alive) setApiStatus("offline"); });
+    return () => { alive = false; };
+  }, []);
+
+  const naverLogin = async () => {
+    if (!hasApiBase()) {
+      setMessage("네이버 로그인에는 백엔드 API 주소가 필요합니다. GitHub Pages 배포에서는 VITE_API_BASE_URL을 배포된 백엔드 주소로 설정해야 합니다.");
+      return;
+    }
+    if (apiStatus === "offline" || apiStatus === "checking") {
+      setMessage("백엔드 서버에 연결할 수 없습니다. 로컬에서는 backend에서 npm run dev를 실행해야 네이버 로그인이 시작됩니다.");
+      return;
+    }
+    if (apiStatus === "missing-oauth") {
+      setMessage("백엔드는 켜져 있지만 NAVER_CLIENT_ID와 NAVER_CLIENT_SECRET이 설정되지 않았습니다.");
+      return;
+    }
+    try {
+      const returnTo = new URL(import.meta.env.BASE_URL || "/", window.location.origin).toString();
+      const { url } = await api.naverLoginUrl(returnTo);
+      window.location.href = url;
+    } catch (err) {
+      setMessage(err.message);
+    }
   };
 
-  const rename = id => {
-    const d = JSON.parse(localStorage.getItem("sv_docs") || "[]").map(x => x.id === id ? { ...x, title: editTitle } : x);
-    localStorage.setItem("sv_docs", JSON.stringify(d));
-    setEditId(null);
-    reload();
-  };
+  return (
+    <main style={{ maxWidth: 420, margin: "60px auto", padding: 20 }}>
+      <Panel title="로그인">
+        <p style={{ margin: "0 0 14px", color: C.sub, fontSize: 13, lineHeight: 1.6 }}>로그인하면 문서 저장과 최근 작업 관리 기능을 서버 계정과 연결할 수 있습니다.</p>
+        <div style={{ marginBottom: 12, border: `1px solid ${C.lineSoft}`, background: C.panelAlt, borderRadius: 8, padding: 11, display: "grid", gap: 6 }}>
+          <span style={{ fontSize: 12, color: C.text, fontWeight: 700 }}>API 연결 상태</span>
+          <span style={{ fontSize: 12, color: apiStatus === "online" ? C.success : apiStatus === "checking" ? C.warn : C.danger, fontFamily: C.mono }}>
+            {apiStatus === "online" && `online · ${apiBase}`}
+            {apiStatus === "checking" && `checking · ${apiBase}`}
+            {apiStatus === "offline" && `offline · ${apiBase}`}
+            {apiStatus === "missing-oauth" && `backend online · naver env missing`}
+            {apiStatus === "not-configured" && "not configured · VITE_API_BASE_URL 필요"}
+          </span>
+        </div>
+        <Button variant="primary" onClick={naverLogin} disabled={apiStatus !== "online"} style={{ width: "100%" }}>네이버 OAuth 로그인</Button>
+        <Button onClick={() => onLogin({ username: "체험 사용자" })} style={{ width: "100%", marginTop: 8 }}>체험 모드로 계속</Button>
+        <p style={{ margin: "12px 0 0", color: C.muted, fontSize: 12, lineHeight: 1.55 }}>GitHub Pages는 정적 호스팅이라 자체적으로 OAuth 콜백과 문서 저장 API를 처리할 수 없습니다. 배포된 Node 백엔드 주소를 프론트 환경변수에 연결하면 네이버 로그인이 활성화됩니다.</p>
+        {message && <p style={{ color: C.warn, fontSize: 12, lineHeight: 1.5 }}>{message}</p>}
+      </Panel>
+    </main>
+  );
+}
 
-  // 편집기로 이동하며 문서 전달 (sessionStorage 해킹 제거)
-  const openDoc = doc => {
-    onOpenDoc(doc);
+function upsertSchema(list, schema) {
+  const idx = list.findIndex(item => item.tableName.toLowerCase() === schema.tableName.toLowerCase());
+  if (idx >= 0) list[idx] = schema;
+  else list.push(schema);
+}
+
+function addRecentSql(title, sql) {
+  const recent = readJSON(STORAGE.recent, []);
+  const next = [{ title, sql, updated_at: new Date().toISOString() }, ...recent.filter(item => item.sql !== sql)].slice(0, 10);
+  writeJSON(STORAGE.recent, next);
+}
+
+function firstSqlLine(sql) {
+  return sql.split("\n").map(line => line.trim()).find(Boolean) || "SQL";
+}
+
+export default function App() {
+  const [page, setPage] = useState("home");
+  const [incomingSql, setIncomingSql] = useState(null);
+  const [user, setUser] = useState(() => authStore.getUser() || readJSON(STORAGE.user, null));
+  const [authMessage, setAuthMessage] = useState("");
+
+  useEffect(() => {
+    Object.assign(document.body.style, {
+      margin: 0,
+      background: C.bg,
+      fontFamily: C.sans,
+      color: C.text,
+      overflowX: "hidden",
+    });
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token");
+    const error = params.get("error");
+    if (token) {
+      authStore.save(token);
+      const nextUser = authStore.getUser();
+      setUser(nextUser);
+      setPage("editor");
+      window.history.replaceState({}, "", window.location.pathname);
+      return;
+    }
+    if (error) {
+      const messages = {
+        cancelled: "네이버 로그인이 취소되었습니다.",
+        oauth_failed: "네이버 인증 처리 중 오류가 발생했습니다. 백엔드 환경변수와 네이버 콜백 URL을 확인하세요.",
+      };
+      setAuthMessage(messages[error] || "로그인 처리 중 오류가 발생했습니다.");
+      setPage("login");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
+
+  const loadExample = item => {
+    setIncomingSql({ id: Date.now(), title: item.title, sql: item.sql });
     setPage("editor");
   };
 
-  return (
-    <div style={{ maxWidth:780, margin:"0 auto", padding: bp.isMobile ? "24px 16px" : "36px 24px", fontFamily: C.sans }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
-        <div>
-          <h2 style={{ margin:"0 0 3px", fontSize:17, fontWeight:700, color: C.text }}>📁 내 문서</h2>
-          <p style={{ margin:0, fontSize:12.5, color: C.textSub }}>저장된 SQL 문서 목록입니다.</p>
-        </div>
-        <Btn v="primary" sz="sm" onClick={() => setPage("editor")}>+ 새 문서</Btn>
-      </div>
+  const handleLogin = nextUser => {
+    setUser(nextUser);
+    writeJSON(STORAGE.user, nextUser);
+    setPage("editor");
+  };
 
-      {!user && (
-        <div style={{ background: C.yellowBg, border:`1px solid ${C.yellowBdr}`, borderRadius:8, padding:"10px 14px", marginBottom:18, fontSize:12.5, color:"#92400e" }}>
-          💡 체험 모드 — 문서는 이 기기에만 저장됩니다.
-          <button onClick={() => setPage("login")} style={{ marginLeft:8, background:"none", border:"none", color: C.accent, cursor:"pointer", fontSize:12.5, fontFamily: C.sans }}>로그인하기</button>
-        </div>
-      )}
-
-      {docs.length === 0 ? (
-        <div style={{ textAlign:"center", padding:"52px 0", color: C.muted }}>
-          <div style={{ fontSize:38, marginBottom:11 }}>📄</div>
-          <div style={{ fontSize:13.5, color: C.textSub, marginBottom:14 }}>저장된 문서가 없습니다.</div>
-          <Btn v="primary" onClick={() => setPage("editor")}>SQL 편집기로 이동</Btn>
-        </div>
-      ) : (
-        <div style={{ display:"flex", flexDirection:"column", gap:7 }}>
-          {docs.map(doc => (
-            <div key={doc.id} style={{ background: C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:"12px 15px" }}>
-              <div style={{ display:"flex", alignItems:"center", gap:9, flexWrap:"wrap" }}>
-                <span style={{ fontSize:18, flexShrink:0 }}>📄</span>
-                <div style={{ flex:1, minWidth:0 }}>
-                  {editId === doc.id ? (
-                    <div style={{ display:"flex", gap:5, alignItems:"center", flexWrap:"wrap" }}>
-                      <input
-                        value={editTitle}
-                        onChange={e => setEditTitle(e.target.value)}
-                        onKeyDown={e => e.key === "Enter" && rename(doc.id)}
-                        style={{ padding:"3px 8px", borderRadius:5, border:`1px solid ${C.accent}`, fontSize:13, fontFamily: C.sans, outline:"none" }}
-                        autoFocus
-                      />
-                      <Btn v="primary" sz="sm" onClick={() => rename(doc.id)}>저장</Btn>
-                      <Btn sz="sm" onClick={() => setEditId(null)}>취소</Btn>
-                    </div>
-                  ) : (
-                    <>
-                      <div style={{ fontWeight:600, fontSize:13.5, color: C.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{doc.title}</div>
-                      <div style={{ fontSize:11, color: C.muted, marginTop:2 }}>{new Date(doc.updated_at).toLocaleString("ko-KR")}</div>
-                    </>
-                  )}
-                </div>
-                <div style={{ display:"flex", gap:5, flexShrink:0, flexWrap:"wrap" }}>
-                  <Btn v="primary" sz="sm" onClick={() => openDoc(doc)}>열기</Btn>
-                  <Btn sz="sm" onClick={() => { setEditId(doc.id); setEditTitle(doc.title); }}>수정</Btn>
-                  <Btn v="danger" sz="sm" onClick={() => del(doc.id)}>삭제</Btn>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 앱 루트
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-export default function App() {
-  const bp = useBp();
-
-  const [page,    setPage]    = useState("home");
-  const [user,    setUser]    = useState(() => {
-    try { return JSON.parse(localStorage.getItem("sv_user") || "null"); } catch { return null; }
-  });
-  const [schemas, setSchemas] = useState([]);
-  // DocsPage → EditorPage 문서 전달용 (sessionStorage 없이 상태로)
-  const [pendingDoc, setPendingDoc] = useState(null);
-
-  const handleLogin  = u => { setUser(u); setPage("editor"); };
-  const handleLogout = () => { setUser(null); localStorage.removeItem("sv_user"); setPage("home"); };
-
-  // 전역 body 스타일
-  useEffect(() => {
-    Object.assign(document.body.style, { margin:0, padding:0, background: C.bg, fontFamily: C.sans, overflowX:"hidden" });
-  }, []);
+  const handleLogout = () => {
+    authStore.clear();
+    localStorage.removeItem(STORAGE.user);
+    setUser(null);
+    setPage("home");
+  };
 
   return (
-    <div style={{ minHeight:"100vh", background: C.bg }}>
-      <NavBar page={page} setPage={setPage} user={user} onLogout={handleLogout} bp={bp} />
-
-      {page === "home"       && <HomePage     setPage={setPage} bp={bp} />}
-      {page === "login"      && <LoginPage    setPage={setPage} onLogin={handleLogin} />}
-      {page === "editor"     && (
-        <EditorPage
-          user={user}
-          setPage={setPage}
-          schemas={schemas}
-          setSchemas={setSchemas}
-          bp={bp}
-          initDoc={pendingDoc}
-          onInitDocConsumed={() => setPendingDoc(null)}
-        />
-      )}
-      {page === "visualizer" && <VisualizerPage schemas={schemas} setSchemas={setSchemas} bp={bp} />}
-      {page === "concepts"   && <ConceptsPage bp={bp} />}
-      {page === "docs"       && (
-        <DocsPage
-          user={user}
-          setPage={setPage}
-          bp={bp}
-          onOpenDoc={doc => { setPendingDoc(doc); }}
-        />
-      )}
+    <div style={{ minHeight: "100vh", background: C.bg }}>
+      <NavBar page={page} setPage={setPage} user={user} onLogout={handleLogout} />
+      {page === "home" && <HomeDashboard setPage={setPage} loadExample={loadExample} />}
+      {page === "editor" && <Workspace initialRequest={incomingSql} />}
+      {page === "visualizer" && <VisualizerPage loadExample={loadExample} />}
+      {page === "concepts" && <ConceptsPage loadExample={loadExample} />}
+      {page === "docs" && <DocsPage setPage={setPage} loadExample={loadExample} />}
+      {page === "login" && <LoginPage onLogin={handleLogin} authMessage={authMessage} />}
     </div>
   );
 }

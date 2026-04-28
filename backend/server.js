@@ -22,8 +22,8 @@ const CONFIG = {
   NAVER_CLIENT_ID:     process.env.NAVER_CLIENT_ID     || "YOUR_NAVER_CLIENT_ID",
   NAVER_CLIENT_SECRET: process.env.NAVER_CLIENT_SECRET || "YOUR_NAVER_CLIENT_SECRET",
   NAVER_CALLBACK_URL:  process.env.NAVER_CALLBACK_URL  || "http://localhost:3001/api/auth/naver/callback",
-  FRONTEND_URL:        process.env.FRONTEND_URL        || "http://localhost:5173",
-  CORS_ORIGINS:        process.env.CORS_ORIGINS        || process.env.FRONTEND_URL || "http://localhost:5173",
+  FRONTEND_URL:        process.env.FRONTEND_URL        || "http://localhost:5173/sql-visual/",
+  CORS_ORIGINS:        process.env.CORS_ORIGINS        || process.env.FRONTEND_URL || "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,https://jiwon0524.github.io",
 };
 
 const allowedOrigins = CONFIG.CORS_ORIGINS
@@ -31,10 +31,59 @@ const allowedOrigins = CONFIG.CORS_ORIGINS
   .map(origin => origin.trim())
   .filter(Boolean);
 
+function originOf(value) {
+  try { return new URL(value).origin; }
+  catch { return null; }
+}
+
+function safeReturnTo(value) {
+  const fallback = CONFIG.FRONTEND_URL;
+  if (!value) return fallback;
+  const allowed = new Set([CONFIG.FRONTEND_URL, ...allowedOrigins].map(originOf).filter(Boolean));
+  try {
+    const url = new URL(value);
+    return allowed.has(url.origin) ? url.toString() : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function encodeState(returnTo) {
+  const raw = Buffer.from(JSON.stringify({ nonce: Math.random().toString(36).slice(2), returnTo })).toString("base64");
+  return raw.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function decodeStateReturnTo(state) {
+  if (!state) return CONFIG.FRONTEND_URL;
+  try {
+    const normalized = String(state).replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), "=");
+    const parsed = JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
+    return safeReturnTo(parsed.returnTo);
+  } catch {
+    return CONFIG.FRONTEND_URL;
+  }
+}
+
+function withQuery(target, key, value) {
+  const url = new URL(target);
+  url.searchParams.set(key, value);
+  return url.toString();
+}
+
 function requireConfig(name, value) {
   if (!value || value.startsWith("YOUR_")) {
     console.warn(`⚠️  ${name} 환경변수를 설정해야 해당 기능이 정상 동작합니다.`);
   }
+}
+
+function isNaverConfigured() {
+  return Boolean(
+    CONFIG.NAVER_CLIENT_ID &&
+    CONFIG.NAVER_CLIENT_SECRET &&
+    !CONFIG.NAVER_CLIENT_ID.startsWith("YOUR_") &&
+    !CONFIG.NAVER_CLIENT_SECRET.startsWith("YOUR_")
+  );
 }
 
 requireConfig("NAVER_CLIENT_ID", CONFIG.NAVER_CLIENT_ID);
@@ -97,7 +146,11 @@ function auth(req, res, next) {
 
 // Step 1: 로그인 URL 생성
 app.get("/api/auth/naver", (req, res) => {
-  const state = Math.random().toString(36).substring(2);
+  if (!isNaverConfigured()) {
+    return res.status(503).json({ error: "NAVER_CLIENT_ID와 NAVER_CLIENT_SECRET 환경변수가 설정되어야 네이버 로그인을 사용할 수 있습니다." });
+  }
+  const returnTo = safeReturnTo(req.query.returnTo);
+  const state = encodeState(returnTo);
   const params = new URLSearchParams({
     response_type: "code",
     client_id:     CONFIG.NAVER_CLIENT_ID,
@@ -110,7 +163,8 @@ app.get("/api/auth/naver", (req, res) => {
 // Step 2: 콜백 처리
 app.get("/api/auth/naver/callback", async (req, res) => {
   const { code, state } = req.query;
-  if (!code) return res.redirect(`${CONFIG.FRONTEND_URL}/login?error=cancelled`);
+  const returnTo = decodeStateReturnTo(state);
+  if (!code) return res.redirect(withQuery(returnTo, "error", "cancelled"));
   try {
     // 네이버에서 액세스 토큰 받기
     const tokenRes = await axios.post("https://nid.naver.com/oauth2.0/token", null, {
@@ -139,15 +193,15 @@ app.get("/api/auth/naver/callback", async (req, res) => {
     }
 
     const token = jwt.sign({ id: userId, username: nickname || "사용자", email, profile_image }, CONFIG.JWT_SECRET, { expiresIn: "7d" });
-    res.redirect(`${CONFIG.FRONTEND_URL}/auth/callback?token=${token}`);
+    res.redirect(withQuery(returnTo, "token", token));
   } catch (err) {
     console.error("네이버 OAuth 오류:", err.message);
-    res.redirect(`${CONFIG.FRONTEND_URL}/login?error=oauth_failed`);
+    res.redirect(withQuery(returnTo, "error", "oauth_failed"));
   }
 });
 
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true, service: "SQLVisual API" });
+  res.json({ ok: true, service: "SQLVisual API", naverConfigured: isNaverConfigured() });
 });
 
 app.get("/api/auth/me", auth, (req, res) => {

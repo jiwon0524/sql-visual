@@ -166,6 +166,143 @@ export function explainSQL(sql) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 실무형 SQL 해설
+// 반환: { summary, steps, tips, cautions }
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+export function explainDetailedSQL(sql) {
+  const statements = splitStatements(sql).filter(Boolean);
+  if (statements.length === 0) {
+    return {
+      summary: "실행할 SQL이 없습니다.",
+      steps: ["SQL 편집기에 실행할 쿼리를 입력하세요."],
+      tips: ["짧은 쿼리부터 실행해 결과와 구조를 함께 확인해보세요."],
+      cautions: [],
+    };
+  }
+
+  if (statements.length > 1) {
+    const details = statements.map((stmt, idx) => explainOneStatement(stmt, idx + 1));
+    return {
+      summary: `${statements.length}개의 SQL 문을 순서대로 실행합니다.`,
+      steps: details.map(d => `${d.order}. ${d.summary}`),
+      tips: [...new Set(details.flatMap(d => d.tips))].slice(0, 4),
+      cautions: [...new Set(details.flatMap(d => d.cautions))].slice(0, 4),
+    };
+  }
+
+  const one = explainOneStatement(statements[0], 1);
+  return {
+    summary: one.summary,
+    steps: one.steps,
+    tips: one.tips,
+    cautions: one.cautions,
+  };
+}
+
+function explainOneStatement(stmt, order) {
+  const s = stmt.trim();
+  const up = s.toUpperCase().replace(/\s+/g, " ");
+
+  if (up.startsWith("CREATE TABLE")) {
+    const schema = parseCreateTable(s);
+    const table = schema?.tableName || s.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)/i)?.[1] || "테이블";
+    const steps = schema?.columns?.length
+      ? schema.columns.map(col => {
+          const roles = [];
+          if (col.pk) roles.push("기본키");
+          if (col.fk) roles.push(`${col.refTable} 테이블 참조`);
+          if (col.notNull && !col.pk) roles.push("필수 입력");
+          if (col.unique) roles.push("중복 불가");
+          if (col.check) roles.push(`조건 검사(${col.check})`);
+          return `${col.name}은 ${col.type} 컬럼${roles.length ? `이며 ${roles.join(", ")} 역할을 합니다` : "입니다"}.`;
+        })
+      : [`${table} 테이블의 컬럼 구조를 정의합니다.`];
+
+    return {
+      order,
+      summary: `${table}라는 테이블을 생성합니다.`,
+      steps,
+      tips: ["기본키는 보통 숫자 ID를 사용하면 조회와 관계 설정이 단순해집니다."],
+      cautions: schema?.foreignKeys?.length
+        ? ["외래키는 참조 대상 테이블이 먼저 존재해야 합니다."]
+        : ["CREATE TABLE은 이미 같은 이름의 테이블이 있으면 실패할 수 있습니다."],
+    };
+  }
+
+  if (up.startsWith("SELECT")) {
+    const table = s.match(/\bFROM\s+(\w+)/i)?.[1] || "테이블";
+    const columns = s.match(/SELECT\s+([\s\S]+?)\s+FROM\b/i)?.[1]?.trim() || "*";
+    const where = s.match(/\bWHERE\s+([\s\S]+?)(?:\bGROUP|\bORDER|\bHAVING|\bLIMIT|$)/i)?.[1]?.trim();
+    const join = s.match(/\b(?:INNER|LEFT|RIGHT|FULL)?\s*(?:OUTER\s+)?JOIN\s+(\w+)\s+ON\s+([\s\S]+?)(?:\bWHERE|\bGROUP|\bORDER|\bHAVING|\bLIMIT|$)/i);
+    const group = s.match(/\bGROUP\s+BY\s+([\w,\s]+?)(?:\bHAVING|\bORDER|\bLIMIT|$)/i)?.[1]?.trim();
+    const orderBy = s.match(/\bORDER\s+BY\s+([\s\S]+?)(?:\bLIMIT|$)/i)?.[1]?.trim();
+    const limit = s.match(/\bLIMIT\s+(\d+)/i)?.[1];
+    const steps = [`${table} 테이블을 조회합니다.`];
+
+    if (columns === "*") steps.push("* 은 모든 컬럼을 의미합니다.");
+    else steps.push(`${columns} 컬럼만 결과에 포함합니다.`);
+    if (join) steps.push(`${join[1]} 테이블을 ${join[2].trim()} 조건으로 연결합니다.`);
+    if (where) steps.push(`WHERE 조건으로 ${where}에 맞는 행만 남깁니다.`);
+    if (group) steps.push(`${group} 기준으로 행을 그룹화합니다.`);
+    if (orderBy) steps.push(`${orderBy} 기준으로 결과를 정렬합니다.`);
+    if (limit) steps.push(`결과를 최대 ${limit}개로 제한합니다.`);
+
+    return {
+      order,
+      summary: where ? `${where} 조건을 만족하는 ${table} 데이터를 조회합니다.` : `${table} 데이터를 조회합니다.`,
+      steps,
+      tips: columns === "*" ? ["실무에서는 필요한 컬럼만 명시하면 응답 크기와 유지보수성이 좋아집니다."] : ["조건 컬럼에 인덱스가 있으면 조회 성능이 좋아집니다."],
+      cautions: join ? ["JOIN 조건이 빠지거나 넓으면 결과 행 수가 예상보다 크게 늘어날 수 있습니다."] : [],
+    };
+  }
+
+  if (up.startsWith("INSERT INTO")) {
+    const table = s.match(/INSERT\s+INTO\s+(\w+)/i)?.[1] || "테이블";
+    const cols = s.match(/INSERT\s+INTO\s+\w+\s*\(([^)]+)\)/i)?.[1];
+    return {
+      order,
+      summary: `${table} 테이블에 새 데이터를 추가합니다.`,
+      steps: cols ? [`${cols} 컬럼에 값을 넣습니다.`, "VALUES에 적은 값이 같은 순서로 저장됩니다."] : ["테이블 컬럼 순서에 맞춰 값을 저장합니다."],
+      tips: ["INSERT할 컬럼명을 명시하면 테이블 구조가 바뀌어도 쿼리가 덜 깨집니다."],
+      cautions: ["PRIMARY KEY나 UNIQUE 컬럼에 중복 값이 들어가면 실패합니다."],
+    };
+  }
+
+  if (up.startsWith("UPDATE")) {
+    const table = s.match(/UPDATE\s+(\w+)/i)?.[1] || "테이블";
+    const set = s.match(/\bSET\s+([\s\S]+?)(?:\bWHERE|$)/i)?.[1]?.trim();
+    const where = s.match(/\bWHERE\s+([\s\S]+?)$/i)?.[1]?.trim();
+    return {
+      order,
+      summary: `${table} 테이블의 기존 데이터를 수정합니다.`,
+      steps: [`${set || "지정한 컬럼"} 값을 변경합니다.`, where ? `${where} 조건에 맞는 행만 수정합니다.` : "WHERE 조건이 없어 모든 행이 수정됩니다."],
+      tips: ["UPDATE 전에는 같은 WHERE 조건으로 SELECT를 먼저 실행해 대상 행을 확인하세요."],
+      cautions: where ? [] : ["WHERE 없는 UPDATE는 전체 데이터를 바꿀 수 있습니다."],
+    };
+  }
+
+  if (up.startsWith("DELETE FROM")) {
+    const table = s.match(/DELETE\s+FROM\s+(\w+)/i)?.[1] || "테이블";
+    const where = s.match(/\bWHERE\s+([\s\S]+?)$/i)?.[1]?.trim();
+    return {
+      order,
+      summary: `${table} 테이블에서 데이터를 삭제합니다.`,
+      steps: [where ? `${where} 조건에 맞는 행만 삭제합니다.` : "WHERE 조건이 없어 모든 행이 삭제됩니다."],
+      tips: ["DELETE 전에는 같은 WHERE 조건으로 SELECT를 먼저 실행해 삭제 대상을 확인하세요."],
+      cautions: where ? [] : ["WHERE 없는 DELETE는 테이블의 모든 행을 삭제합니다."],
+    };
+  }
+
+  return {
+    order,
+    summary: "SQL 문을 실행합니다.",
+    steps: explainSQL(s).map(item => item.text.replace(/<[^>]+>/g, "")),
+    tips: ["결과 탭에서 실제 반환 데이터와 실행 시간을 먼저 확인하세요."],
+    cautions: [],
+  };
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 에러 분석
 // 반환: { title, msg, hint }
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
