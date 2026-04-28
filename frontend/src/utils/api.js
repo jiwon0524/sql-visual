@@ -1,3 +1,20 @@
+export function normalizeApiBase(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    url.hash = "";
+    url.search = "";
+    url.pathname = url.pathname.replace(/\/$/, "");
+    if (!url.pathname.endsWith("/api")) {
+      url.pathname = `${url.pathname}/api`.replace(/\/+/g, "/");
+    }
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return raw.replace(/\/$/, "");
+  }
+}
+
 function localApiBase() {
   if (typeof window === "undefined") return "";
   const host = window.location.hostname;
@@ -8,12 +25,12 @@ function runtimeApiBase() {
   if (typeof window === "undefined") return "";
   const params = new URLSearchParams(window.location.search);
   const fromUrl = params.get("api");
-  if (fromUrl) localStorage.setItem("sv_api_base", fromUrl);
-  return localStorage.getItem("sv_api_base") || "";
+  if (fromUrl) localStorage.setItem("sv_api_base", normalizeApiBase(fromUrl));
+  return normalizeApiBase(localStorage.getItem("sv_api_base"));
 }
 
 const DEFAULT_BASE = import.meta.env.DEV ? "http://localhost:3001/api" : localApiBase();
-const BASE = (import.meta.env.VITE_API_BASE_URL || runtimeApiBase() || DEFAULT_BASE).replace(/\/$/, "");
+const BASE = normalizeApiBase(import.meta.env.VITE_API_BASE_URL || runtimeApiBase() || DEFAULT_BASE);
 
 export const apiBase = BASE;
 
@@ -35,7 +52,7 @@ function decodeJwtPayload(jwt) {
 
 async function req(method, path, body = null) {
   if (!BASE) {
-    throw new Error("백엔드 API 주소가 설정되어 있지 않습니다. 로컬 백엔드 연결을 먼저 설정하세요.");
+    throw new Error("백엔드 API 주소가 설정되어 있지 않습니다. 공개 API 주소를 입력하거나 로컬 백엔드를 연결하세요.");
   }
 
   const headers = { "Content-Type": "application/json" };

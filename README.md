@@ -130,3 +130,7 @@ npm run deploy
 ```
 
 GitHub Pages는 정적 호스팅이므로 백엔드 서버를 자동으로 실행하지 않습니다. 로그인/클라우드 저장까지 배포하려면 백엔드를 별도 서비스에 배포하고, 프론트엔드 빌드 환경에 `VITE_API_BASE_URL=https://배포된-api주소/api`를 설정해야 합니다.
+
+## 공개 백엔드 연결
+
+다른 컴퓨터에서도 네이버 로그인과 문서 저장을 사용하려면 `localhost`가 아니라 공개 배포된 백엔드 API 주소가 필요합니다. 자세한 설정 순서는 [`backend/DEPLOY.md`](backend/DEPLOY.md)를 참고하세요.
