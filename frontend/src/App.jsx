@@ -516,6 +516,122 @@ function schemasFromSql(sql) {
     .filter(Boolean);
 }
 
+function stripSqlLineComment(line) {
+  let out = "";
+  let inString = false;
+  let quote = "";
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    const next = line[i + 1];
+    if (!inString && (ch === "'" || ch === '"')) {
+      inString = true;
+      quote = ch;
+      out += ch;
+      continue;
+    }
+    if (inString && ch === quote) {
+      inString = false;
+      quote = "";
+      out += ch;
+      continue;
+    }
+    if (!inString && ch === "-" && next === "-") break;
+    out += ch;
+  }
+  return out;
+}
+
+function splitStatementsWithLocations(source) {
+  const clean = String(source || "").split(/\r?\n/).map(stripSqlLineComment).join("\n");
+  const blocks = [];
+  let cur = "";
+  let startLine = null;
+  let line = 1;
+  let inString = false;
+  let quote = "";
+
+  for (let i = 0; i < clean.length; i++) {
+    const ch = clean[i];
+    if (startLine == null && !/\s/.test(ch)) startLine = line;
+    if (!inString && (ch === "'" || ch === '"')) {
+      inString = true;
+      quote = ch;
+      cur += ch;
+    } else if (inString && ch === quote) {
+      inString = false;
+      quote = "";
+      cur += ch;
+    } else if (!inString && ch === ";") {
+      const stmt = cur.trim();
+      if (stmt) blocks.push({ stmt, startLine: startLine || line, endLine: line });
+      cur = "";
+      startLine = null;
+    } else {
+      cur += ch;
+    }
+    if (ch === "\n") line++;
+  }
+
+  const stmt = cur.trim();
+  if (stmt) blocks.push({ stmt, startLine: startLine || line, endLine: line });
+  return blocks;
+}
+
+function findLineContaining(lines, term) {
+  const needle = String(term || "").trim().replace(/^["'`]|["'`]$/g, "").toLowerCase();
+  if (!needle) return -1;
+  return lines.findIndex(line => line.toLowerCase().includes(needle));
+}
+
+function findLikelyMissingCommaLine(lines) {
+  const columnLike = /^\s*[\w"`]+\s+[\w]+(?:\s*\([^)]*\))?/i;
+  const constraintLike = /^\s*(primary|foreign|unique|check|constraint)\b/i;
+  for (let i = 0; i < lines.length - 1; i++) {
+    const cur = lines[i].trim();
+    const next = lines[i + 1].trim();
+    if (!cur || !next || cur.endsWith(",") || cur.endsWith("(")) continue;
+    if (constraintLike.test(next)) continue;
+    if (columnLike.test(cur) && columnLike.test(next)) return i;
+  }
+  return -1;
+}
+
+function locateSqlErrorLine(block, rawMessage, analyzed) {
+  const lines = block.stmt.split("\n");
+  const message = String(rawMessage || "");
+  const near = message.match(/near\s+"([^"]+)"/i)?.[1]
+    || message.match(/near\s+'([^']+)'/i)?.[1]
+    || message.match(/near\s+([^\s:]+)/i)?.[1];
+  const named = message.match(/(?:table|column):\s*["']?([\w.]+)["']?/i)?.[1];
+  const title = analyzed?.title || "";
+  let idx = findLineContaining(lines, near);
+  if (idx < 0) idx = findLineContaining(lines, named);
+  if (idx < 0 && (title.includes("쉼표") || title.includes(","))) idx = findLikelyMissingCommaLine(lines);
+  if (idx < 0 && title.includes("괄호")) {
+    let balance = 0;
+    for (let i = 0; i < lines.length; i++) {
+      balance += (lines[i].match(/\(/g) || []).length;
+      balance -= (lines[i].match(/\)/g) || []).length;
+      if (balance < 0) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx < 0) {
+      let lastOpen = -1;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].includes("(")) lastOpen = i;
+      }
+      idx = Math.max(0, lastOpen);
+    }
+  }
+  if (idx < 0) idx = 0;
+  return {
+    line: block.startLine + idx,
+    text: lines[idx]?.trim() || block.stmt.split(/\s+/).slice(0, 8).join(" "),
+  };
+}
+
 function Button({ children, onClick, variant = "default", disabled, title, style }) {
   const variants = {
     default: { background: C.panel, color: C.text, border: `1px solid ${C.line}` },
@@ -762,13 +878,13 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
   const errorCount = outputs.filter(out => out.type === "error").length;
 
   const runSql = useCallback(() => {
-    const clean = sql.split("\n").filter(line => !line.trim().startsWith("--")).join("\n");
-    const statements = splitStatements(clean);
+    const statementBlocks = splitStatementsWithLocations(sql);
     const nextOutputs = [];
     const nextSchemas = [...schemas];
     const start = performance.now();
 
-    for (const stmt of statements) {
+    for (const block of statementBlocks) {
+      const { stmt } = block;
       if (!stmt.trim()) continue;
 
       try {
@@ -776,15 +892,27 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
         if (schema) upsertSchema(nextSchemas, schema);
 
         if (!sqlDb) {
-          nextOutputs.push({ type: "ok", label: "해설 준비", stmt });
+          nextOutputs.push({ type: "ok", label: "해설 준비", stmt, startLine: block.startLine, endLine: block.endLine });
           continue;
         }
 
         const results = sqlDb.exec(stmt);
-        if (results.length > 0) nextOutputs.push({ type: "table", label: "SELECT 결과", stmt, data: results[0] });
-        else nextOutputs.push({ type: "ok", label: schema ? "구조 분석 완료" : "실행 완료", stmt });
+        if (results.length > 0) nextOutputs.push({ type: "table", label: "SELECT 결과", stmt, startLine: block.startLine, endLine: block.endLine, data: results[0] });
+        else nextOutputs.push({ type: "ok", label: schema ? "구조 분석 완료" : "실행 완료", stmt, startLine: block.startLine, endLine: block.endLine });
       } catch (err) {
-        nextOutputs.push({ type: "error", label: "오류", stmt, err: analyzeError(stmt, err.message) });
+        const analyzed = analyzeError(stmt, err.message);
+        const errorLocation = locateSqlErrorLine(block, err.message, analyzed);
+        nextOutputs.push({
+          type: "error",
+          label: "오류",
+          stmt,
+          startLine: block.startLine,
+          endLine: block.endLine,
+          errorLine: errorLocation.line,
+          errorLineText: errorLocation.text,
+          rawError: err.message,
+          err: analyzed,
+        });
       }
     }
 
@@ -1139,7 +1267,19 @@ function ErrorView({ outputs }) {
     <div style={{ padding: 12, display: "grid", gap: 10 }}>
       {errors.map((out, idx) => (
         <section key={idx} style={{ border: "1px solid #fecaca", background: "#fff7f7", borderRadius: 8, padding: 13 }}>
-          <h3 style={{ margin: "0 0 7px", color: C.danger, fontSize: 13 }}>{out.err.title}</h3>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 7 }}>
+            <h3 style={{ margin: 0, color: C.danger, fontSize: 13 }}>{out.err.title}</h3>
+            {out.errorLine && <span style={{ flex: "0 0 auto", fontFamily: C.mono, fontSize: 11, fontWeight: 800, color: C.danger, background: "#fee2e2", border: "1px solid #fecaca", borderRadius: 999, padding: "3px 8px" }}>line {out.errorLine}</span>}
+          </div>
+          {out.errorLine && (
+            <div style={{ margin: "0 0 9px", display: "grid", gap: 5 }}>
+              <div style={{ color: C.sub, fontSize: 12 }}>
+                에러 위치: <b style={{ color: C.danger }}>{out.errorLine}번째 줄</b>
+                {out.startLine && out.endLine && out.startLine !== out.endLine ? ` · 실행 문장 범위 ${out.startLine}-${out.endLine}줄` : ""}
+              </div>
+              {out.errorLineText && <code style={{ display: "block", whiteSpace: "pre-wrap", background: C.panel, border: "1px solid #fecaca", borderRadius: 7, padding: "8px 10px", color: C.text, fontFamily: C.mono, fontSize: 11 }}>{out.errorLineText}</code>}
+            </div>
+          )}
           <div style={{ color: C.text, fontSize: 12, lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: out.err.msg }} />
           <p style={{ margin: "8px 0 0", color: C.sub, fontSize: 12 }}>{out.err.hint}</p>
         </section>
