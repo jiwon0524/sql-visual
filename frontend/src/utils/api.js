@@ -21,6 +21,11 @@ function localApiBase() {
   return host === "localhost" || host === "127.0.0.1" ? "http://localhost:3001/api" : "";
 }
 
+function publicApiBase() {
+  if (typeof window === "undefined") return "";
+  return window.location.hostname === "jiwon0524.github.io" ? "https://jiwon0524-sqlvisual-api.onrender.com/api" : "";
+}
+
 function runtimeApiBase() {
   if (typeof window === "undefined") return "";
   const params = new URLSearchParams(window.location.search);
@@ -29,7 +34,7 @@ function runtimeApiBase() {
   return normalizeApiBase(localStorage.getItem("sv_api_base"));
 }
 
-const DEFAULT_BASE = import.meta.env.DEV ? "http://localhost:3001/api" : localApiBase();
+const DEFAULT_BASE = import.meta.env.DEV ? "http://localhost:3001/api" : (localApiBase() || publicApiBase());
 const BASE = normalizeApiBase(import.meta.env.VITE_API_BASE_URL || runtimeApiBase() || DEFAULT_BASE);
 
 export const apiBase = BASE;

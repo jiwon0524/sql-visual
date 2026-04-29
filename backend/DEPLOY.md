@@ -8,6 +8,14 @@ GitHub Pages only serves the React files. Naver OAuth, saved SQL documents, and 
 
 Deploy `backend/` to a public Node host such as Render, Railway, Fly.io, or a VPS.
 
+This repository includes `render.yaml` for Render Blueprint deployment. The intended public API URL is:
+
+```text
+https://jiwon0524-sqlvisual-api.onrender.com/api
+```
+
+The GitHub Pages frontend is configured to use that URL by default in production.
+
 For Render Web Service:
 
 - Root directory: `backend`
@@ -20,7 +28,7 @@ Set these environment variables on the backend host:
 ```env
 NAVER_CLIENT_ID=your_naver_client_id
 NAVER_CLIENT_SECRET=your_naver_client_secret
-NAVER_CALLBACK_URL=https://your-backend.example.com/api/auth/naver/callback
+NAVER_CALLBACK_URL=https://jiwon0524-sqlvisual-api.onrender.com/api/auth/naver/callback
 FRONTEND_URL=https://jiwon0524.github.io/sql-visual/
 CORS_ORIGINS=https://jiwon0524.github.io,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174
 JWT_SECRET=replace_with_a_long_random_secret
@@ -33,7 +41,7 @@ Most hosts provide `PORT` automatically. Only set `PORT` manually if your host t
 In the Naver Developers app settings, add:
 
 - Service URL: `https://jiwon0524.github.io`
-- Callback URL: `https://your-backend.example.com/api/auth/naver/callback`
+- Callback URL: `https://jiwon0524-sqlvisual-api.onrender.com/api/auth/naver/callback`
 
 The Naver app key is the service key for SQLVisual. Users do not share your Naver account. When they click Naver login, Naver authenticates their own Naver account and the backend stores a separate SQLVisual user by that account's `naver_id`.
 
@@ -57,19 +65,19 @@ https://jiwon0524.github.io/sql-visual/
 Enter the public API URL:
 
 ```text
-https://your-backend.example.com/api
+https://jiwon0524-sqlvisual-api.onrender.com/api
 ```
 
 The app stores that API URL in the browser. You can also share a setup link:
 
 ```text
-https://jiwon0524.github.io/sql-visual/?api=https://your-backend.example.com/api
+https://jiwon0524.github.io/sql-visual/?api=https://jiwon0524-sqlvisual-api.onrender.com/api
 ```
 
 For a permanent build-time connection, set this frontend environment variable before running `npm run deploy`:
 
 ```env
-VITE_API_BASE_URL=https://your-backend.example.com/api
+VITE_API_BASE_URL=https://jiwon0524-sqlvisual-api.onrender.com/api
 ```
 
 ## Local Network Preview

@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: jiwon0524-sqlvisual-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: FRONTEND_URL
+        value: https://jiwon0524.github.io/sql-visual/
+      - key: CORS_ORIGINS
+        value: https://jiwon0524.github.io,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174
+      - key: DATA_FILE
+        value: /var/data/sqlvisual-data.json
+      - key: NAVER_CLIENT_ID
+        sync: false
+      - key: NAVER_CLIENT_SECRET
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+    disk:
+      name: sqlvisual-data
+      mountPath: /var/data
+      sizeGB: 1
