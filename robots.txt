@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://jiwon0524.github.io/sql-visual/sitemap.xml
