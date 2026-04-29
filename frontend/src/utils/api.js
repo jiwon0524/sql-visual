@@ -68,6 +68,9 @@ async function req(method, path, body = null) {
       signal: controller.signal,
     });
     const data = await res.json().catch(() => ({}));
+    if (res.status === 404) {
+      throw new Error("백엔드 API가 최신 버전이 아닙니다. 백엔드를 재시작하거나 다시 배포하세요.");
+    }
     if (!res.ok) throw new Error(data.error || "서버 오류가 발생했습니다.");
     return data;
   } catch (err) {
