@@ -64,7 +64,7 @@ function loadSqlJsRuntime() {
   return sqlJsRuntimePromise;
 }
 
-const DEFAULT_SQL = `CREATE TABLE department (
+const LEGACY_DEFAULT_SQL = `CREATE TABLE department (
   dept_id INT PRIMARY KEY,
   name VARCHAR(50) NOT NULL
 );
@@ -84,6 +84,8 @@ SELECT student_id, name, gpa
 FROM student
 WHERE gpa >= 3.5
 ORDER BY gpa DESC;`;
+
+const DEFAULT_SQL = "";
 
 const EXAMPLES = [
   {
@@ -474,6 +476,16 @@ function writeJSON(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
+function normalizeSqlText(sql) {
+  return String(sql || "").replace(/\s+/g, " ").trim();
+}
+
+function isLegacyStarterDraft(draft) {
+  return !draft?.docId
+    && (!draft?.docTitle || draft.docTitle === "Untitled query")
+    && normalizeSqlText(draft.sql) === normalizeSqlText(LEGACY_DEFAULT_SQL);
+}
+
 function currentName(user) {
   return user?.display_name || user?.username || "사용자";
 }
@@ -511,6 +523,7 @@ function tagText(tags) {
 function getWorkspaceDraft() {
   const draft = readJSON(STORAGE.workspace, null);
   if (!draft?.sql) return null;
+  if (isLegacyStarterDraft(draft)) return null;
   return {
     id: "workspace:draft",
     docId: draft.docId || null,
@@ -552,6 +565,28 @@ function mergeVisualizerDocs(...groups) {
     seen.add(key);
     return Boolean(doc.sql_code?.trim());
   });
+}
+
+function siteDocId(docId) {
+  const raw = String(docId || "");
+  if (raw.startsWith("site:")) return raw.slice(5);
+  return /^\d+$/.test(raw) ? raw : null;
+}
+
+function localDocId(docId) {
+  const raw = String(docId || "");
+  return raw.startsWith("local:") ? raw.slice(6) : null;
+}
+
+function localToolbarDocs() {
+  return readJSON(STORAGE.docs, []).map(doc => ({
+    key: `local:${doc.id}`,
+    docId: `local:${doc.id}`,
+    sourceLabel: "브라우저",
+    title: doc.title || "Untitled query",
+    sql_code: doc.sql_code || doc.sql || "",
+    updated_at: doc.updated_at || doc.created_at,
+  })).filter(doc => doc.sql_code.trim());
 }
 
 function schemasFromSql(sql) {
@@ -973,6 +1008,8 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
   const [showLoadChoice, setShowLoadChoice] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [toolbarDocs, setToolbarDocs] = useState(() => localToolbarDocs());
+  const [toolbarDocValue, setToolbarDocValue] = useState("");
   const [workspaceMessage, setWorkspaceMessage] = useState("");
   const [consumedRequestId, setConsumedRequestId] = useState(null);
   const runRef = useRef(null);
@@ -1156,19 +1193,59 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
     editor.addCommand(monaco.KeyCode.F1, () => setShowShortcuts(true));
   }, []);
 
+  const refreshToolbarDocs = useCallback(() => {
+    const localDocs = localToolbarDocs();
+    if (!user || user.local) {
+      setToolbarDocs(localDocs);
+      return;
+    }
+    api.getDocs()
+      .then(items => {
+        const siteDocs = items.map(doc => ({
+          key: `site:${doc.id}`,
+          docId: `site:${doc.id}`,
+          sourceLabel: "내 문서",
+          title: doc.title || "Untitled query",
+          sql_code: doc.sql_code || "",
+          updated_at: doc.updated_at || doc.created_at,
+        })).filter(doc => doc.sql_code.trim());
+        setToolbarDocs(mergeVisualizerDocs(siteDocs, localDocs));
+      })
+      .catch(() => setToolbarDocs(localDocs));
+  }, [user]);
+
+  useEffect(() => {
+    refreshToolbarDocs();
+  }, [refreshToolbarDocs]);
+
+  const openToolbarDoc = value => {
+    if (!value) return;
+    const doc = toolbarDocs.find(item => item.key === value);
+    setToolbarDocValue("");
+    if (!doc) return;
+    setDocId(doc.docId);
+    setDocTitle(doc.title);
+    setSql(doc.sql_code);
+    setOutputs([]);
+    setElapsed(null);
+    setActiveTab("result");
+  };
+
   const saveLocalDoc = () => {
     const docs = readJSON(STORAGE.docs, []);
     const stamp = new Date().toISOString();
-    if (docId) {
-      const idx = docs.findIndex(doc => doc.id === docId);
+    const existingLocalId = localDocId(docId);
+    if (existingLocalId) {
+      const idx = docs.findIndex(doc => String(doc.id) === existingLocalId);
       if (idx >= 0) docs[idx] = { ...docs[idx], title: docTitle, sql_code: sql, updated_at: stamp };
-      else docs.unshift({ id: docId, title: docTitle, sql_code: sql, created_at: stamp, updated_at: stamp });
+      else docs.unshift({ id: existingLocalId, title: docTitle, sql_code: sql, created_at: stamp, updated_at: stamp });
     } else {
       const id = String(Date.now());
       docs.unshift({ id, title: docTitle, sql_code: sql, created_at: stamp, updated_at: stamp });
-      setDocId(id);
+      setDocId(`local:${id}`);
     }
     writeJSON(STORAGE.docs, docs);
+    refreshToolbarDocs();
   };
 
   const saveSiteDoc = async () => {
@@ -1179,12 +1256,14 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
     }
     try {
       const payload = { title: docTitle, sql_code: sql, description: explanation.summary || "" };
-      const saved = docId && /^\d+$/.test(String(docId))
-        ? await api.saveDoc(docId, payload)
+      const existingSiteId = siteDocId(docId);
+      const saved = existingSiteId
+        ? await api.saveDoc(existingSiteId, payload)
         : await api.createDoc(payload);
-      setDocId(saved.id);
+      setDocId(`site:${saved.id}`);
       setWorkspaceMessage("사이트에 저장했습니다.");
       setShowSaveChoice(false);
+      refreshToolbarDocs();
     } catch (err) {
       setWorkspaceMessage(err.message);
     }
@@ -1196,7 +1275,7 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
   };
 
   const loadDoc = doc => {
-    setDocId(doc.id);
+    setDocId(`site:${doc.id}`);
     setDocTitle(doc.title);
     setSql(doc.sql_code);
     setShowDocs(false);
@@ -1226,7 +1305,7 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
     }
     try {
       const shared = await api.createShared({
-        document_id: docId,
+        document_id: siteDocId(docId),
         title,
         sql_code: sql,
         description,
@@ -1257,6 +1336,9 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
         dbReady={dbReady}
         docTitle={docTitle}
         setDocTitle={setDocTitle}
+        docs={toolbarDocs}
+        selectedDoc={toolbarDocValue}
+        onSelectDoc={openToolbarDoc}
         onRun={runSql}
         onRunCurrent={runCurrentSql}
         onSave={() => setShowSaveChoice(true)}
@@ -1307,7 +1389,7 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
 
       {workspaceMessage && <div style={{ position: "fixed", right: 18, bottom: 18, zIndex: 900, background: C.dark, color: "#fff", borderRadius: 8, padding: "10px 12px", fontSize: 12 }}>{workspaceMessage}</div>}
       <input ref={fileInputRef} type="file" accept=".sql,.txt,text/plain" onChange={loadSqlFile} style={{ display: "none" }} />
-      <ExampleModal open={showExamples} onClose={() => setShowExamples(false)} onPick={item => { setSql(item.sql); setDocTitle(item.title); setShowExamples(false); }} />
+      <ExampleModal open={showExamples} onClose={() => setShowExamples(false)} onPick={item => { setSql(item.sql); setDocTitle(item.title); setDocId(null); setShowExamples(false); }} />
       <DocsModal open={showDocs} onClose={() => setShowDocs(false)} onLoad={loadDoc} />
       <ChoiceModal
         open={showSaveChoice}
@@ -1339,7 +1421,7 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
   );
 }
 
-function Toolbar({ dbReady, docTitle, setDocTitle, onRun, onRunCurrent, onSave, onLoad, onReset, onSchema, onExamples, onClearResults, onShare, onShortcuts, elapsed, rowCount, errorCount }) {
+function Toolbar({ dbReady, docTitle, setDocTitle, docs, selectedDoc, onSelectDoc, onRun, onRunCurrent, onSave, onLoad, onReset, onSchema, onExamples, onClearResults, onShare, onShortcuts, elapsed, rowCount, errorCount }) {
   return (
     <div style={{ height: 50, borderBottom: `1px solid ${C.line}`, background: C.panel, display: "flex", alignItems: "center", gap: 8, padding: "0 14px", overflowX: "auto", overflowY: "hidden", scrollbarWidth: "thin" }}>
       <input
@@ -1347,6 +1429,17 @@ function Toolbar({ dbReady, docTitle, setDocTitle, onRun, onRunCurrent, onSave, 
         onChange={event => setDocTitle(event.target.value)}
         style={{ flex: "0 0 190px", width: 190, height: 30, border: `1px solid ${C.line}`, borderRadius: 7, padding: "0 10px", fontSize: 12, color: C.text, background: C.panelAlt, outline: "none" }}
       />
+      <select
+        value={selectedDoc}
+        onChange={event => onSelectDoc(event.target.value)}
+        title="저장된 문서를 바로 열기"
+        style={{ flex: "0 0 230px", width: 230, height: 30, border: `1px solid ${C.line}`, borderRadius: 7, padding: "0 9px", fontSize: 12, color: C.text, background: C.panelAlt, outline: "none" }}
+      >
+        <option value="">문서 열기</option>
+        {docs.map(doc => (
+          <option key={doc.key} value={doc.key}>{doc.sourceLabel} · {doc.title}</option>
+        ))}
+      </select>
       <Button variant="primary" onClick={onRun} title="전체 SQL 실행 (F5)">▶ 전체 실행</Button>
       <Button onClick={onRunCurrent} title="커서가 있는 SQL 한 문장만 실행 (Ctrl+Enter)">현재 실행</Button>
       <Button onClick={onSave} title="사이트 저장 또는 .sql 파일 다운로드 (Ctrl+S)">💾 저장</Button>
@@ -1763,7 +1856,7 @@ function DocsPage({ user, setPage, loadExample, onOpenShared }) {
               <div style={{ color: C.muted, fontSize: 11, marginTop: 5 }}>작성자 {doc.author || currentName(user)} · 마지막 수정 {formatDate(doc.updated_at)}</div>
             </div>
             <div style={{ display: "flex", gap: 7, flexWrap: "wrap", justifyContent: "flex-end" }}>
-              <Button variant="primary" onClick={() => { loadExample({ title: doc.title, sql: doc.sql_code, docId: doc.id }); setPage("editor"); }}>열기</Button>
+              <Button variant="primary" onClick={() => { loadExample({ title: doc.title, sql: doc.sql_code, docId: `site:${doc.id}` }); setPage("editor"); }}>열기</Button>
               <Button onClick={() => renameDoc(doc)}>제목 수정</Button>
               <Button onClick={() => downloadSql(doc.title, doc.sql_code)}>다운로드</Button>
               <Button onClick={() => shareDoc(doc)}>공유</Button>
