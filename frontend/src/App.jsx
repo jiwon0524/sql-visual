@@ -500,6 +500,12 @@ function fileNameFromTitle(title) {
   return `${safe || "sqlvisual-query"}.sql`;
 }
 
+function createBrowserDatabase(SQL) {
+  const db = new SQL.Database();
+  db.exec("PRAGMA foreign_keys = ON");
+  return db;
+}
+
 function downloadSql(title, sql) {
   const blob = new Blob([sql || ""], { type: "text/sql;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -1082,6 +1088,7 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
   const [consumedRequestId, setConsumedRequestId] = useState(null);
   const runRef = useRef(null);
   const runCurrentRef = useRef(null);
+  const sqlFactoryRef = useRef(null);
   const editorRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -1089,7 +1096,8 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
     loadSqlJsRuntime()
       .then(initSqlJs => initSqlJs({ locateFile: file => file.endsWith(".wasm") ? sqlWasmUrl : file }))
       .then(SQL => {
-        setSqlDb(new SQL.Database());
+        sqlFactoryRef.current = SQL;
+        setSqlDb(createBrowserDatabase(SQL));
         setDbReady(true);
       })
       .catch(() => setDbReady(false));
@@ -1409,6 +1417,11 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
 
   const resetWorkspace = () => {
     if (!window.confirm("현재 SQL과 실행 결과를 모두 초기화할까요?")) return;
+    if (sqlDb?.close) sqlDb.close();
+    if (sqlFactoryRef.current) {
+      setSqlDb(createBrowserDatabase(sqlFactoryRef.current));
+      setDbReady(true);
+    }
     setSql("");
     setOutputs([]);
     setSchemas([]);
