@@ -581,10 +581,28 @@ function localDocId(docId) {
 function localToolbarDocs() {
   return readJSON(STORAGE.docs, []).map(doc => ({
     key: `local:${doc.id}`,
+    id: `local:${doc.id}`,
     docId: `local:${doc.id}`,
+    source: "local",
     sourceLabel: "브라우저",
     title: doc.title || "Untitled query",
     sql_code: doc.sql_code || doc.sql || "",
+    updated_at: doc.updated_at || doc.created_at,
+  })).filter(doc => doc.sql_code.trim());
+}
+
+function sharedToolbarDocs(items) {
+  return (items || []).map(doc => ({
+    key: `shared:${doc.id}`,
+    id: `shared:${doc.id}`,
+    docId: null,
+    sharedId: doc.id,
+    source: "shared",
+    sourceLabel: "공유",
+    title: doc.title || "Untitled shared SQL",
+    sql_code: doc.sql_code || "",
+    description: doc.description || "",
+    author: doc.author,
     updated_at: doc.updated_at || doc.created_at,
   })).filter(doc => doc.sql_code.trim());
 }
@@ -1195,22 +1213,22 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
 
   const refreshToolbarDocs = useCallback(() => {
     const localDocs = localToolbarDocs();
-    if (!user || user.local) {
-      setToolbarDocs(localDocs);
-      return;
-    }
-    api.getDocs()
-      .then(items => {
-        const siteDocs = items.map(doc => ({
+    const siteDocsPromise = (!user || user.local)
+      ? Promise.resolve([])
+      : api.getDocs().then(items => items.map(doc => ({
           key: `site:${doc.id}`,
+          id: `site:${doc.id}`,
           docId: `site:${doc.id}`,
+          source: "site",
           sourceLabel: "내 문서",
           title: doc.title || "Untitled query",
           sql_code: doc.sql_code || "",
           updated_at: doc.updated_at || doc.created_at,
-        })).filter(doc => doc.sql_code.trim());
-        setToolbarDocs(mergeVisualizerDocs(siteDocs, localDocs));
-      })
+        })).filter(doc => doc.sql_code.trim())).catch(() => []);
+    const sharedDocsPromise = api.getShared({ sort: "latest" }).then(sharedToolbarDocs).catch(() => []);
+
+    Promise.all([siteDocsPromise, sharedDocsPromise])
+      .then(([siteDocs, sharedDocs]) => setToolbarDocs(mergeVisualizerDocs(siteDocs, localDocs, sharedDocs)))
       .catch(() => setToolbarDocs(localDocs));
   }, [user]);
 
@@ -1223,12 +1241,14 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
     const doc = toolbarDocs.find(item => item.key === value);
     setToolbarDocValue("");
     if (!doc) return;
-    setDocId(doc.docId);
-    setDocTitle(doc.title);
+    const isShared = doc.source === "shared";
+    setDocId(isShared ? null : doc.docId);
+    setDocTitle(isShared ? `${doc.title} copy` : doc.title);
     setSql(doc.sql_code);
     setOutputs([]);
     setElapsed(null);
     setActiveTab("result");
+    if (isShared) setWorkspaceMessage("공유 문서를 작업공간으로 가져왔습니다.");
   };
 
   const saveLocalDoc = () => {
@@ -1422,6 +1442,12 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
 }
 
 function Toolbar({ dbReady, docTitle, setDocTitle, docs, selectedDoc, onSelectDoc, onRun, onRunCurrent, onSave, onLoad, onReset, onSchema, onExamples, onClearResults, onShare, onShortcuts, elapsed, rowCount, errorCount }) {
+  const groupedDocs = docs.reduce((groups, doc) => {
+    const label = doc.sourceLabel || "문서";
+    groups[label] = [...(groups[label] || []), doc];
+    return groups;
+  }, {});
+
   return (
     <div style={{ height: 50, borderBottom: `1px solid ${C.line}`, background: C.panel, display: "flex", alignItems: "center", gap: 8, padding: "0 14px", overflowX: "auto", overflowY: "hidden", scrollbarWidth: "thin" }}>
       <input
@@ -1436,9 +1462,13 @@ function Toolbar({ dbReady, docTitle, setDocTitle, docs, selectedDoc, onSelectDo
         style={{ flex: "0 0 230px", width: 230, height: 30, border: `1px solid ${C.line}`, borderRadius: 7, padding: "0 9px", fontSize: 12, color: C.text, background: C.panelAlt, outline: "none" }}
       >
         <option value="">문서 열기</option>
-        {docs.map(doc => (
-          <option key={doc.key} value={doc.key}>{doc.sourceLabel} · {doc.title}</option>
-        ))}
+        {["내 문서", "브라우저", "공유"].map(label => groupedDocs[label]?.length ? (
+          <optgroup key={label} label={label}>
+            {groupedDocs[label].map(doc => (
+              <option key={doc.key} value={doc.key}>{doc.title}</option>
+            ))}
+          </optgroup>
+        ) : null)}
       </select>
       <Button variant="primary" onClick={onRun} title="전체 SQL 실행 (F5)">▶ 전체 실행</Button>
       <Button onClick={onRunCurrent} title="커서가 있는 SQL 한 문장만 실행 (Ctrl+Enter)">현재 실행</Button>
