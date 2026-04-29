@@ -30,6 +30,8 @@ const STORAGE = {
   docs: "sv_docs",
   recent: "sv_recent_sql",
   user: "sv_user",
+  workspace: "sv_workspace_state",
+  page: "sv_last_page",
 };
 
 const LOCAL_USER = { id: "local", display_name: "체험 사용자", username: "체험 사용자", local: true };
@@ -506,6 +508,52 @@ function tagText(tags) {
   return Array.isArray(tags) ? tags.join(", ") : (tags || "");
 }
 
+function getWorkspaceDraft() {
+  const draft = readJSON(STORAGE.workspace, null);
+  if (!draft?.sql) return null;
+  return {
+    id: "workspace:draft",
+    docId: draft.docId || null,
+    source: "workspace",
+    sourceLabel: "작업 중",
+    title: draft.docTitle || "작업 중 문서",
+    sql_code: draft.sql,
+    updated_at: draft.updated_at,
+    activeTab: draft.activeTab,
+  };
+}
+
+function toVisualizerDoc(doc, source) {
+  const id = doc.id ?? `${doc.title || "document"}:${doc.updated_at || ""}`;
+  return {
+    id: `${source}:${id}`,
+    docId: source === "site" ? doc.id : null,
+    source,
+    sourceLabel: source === "site" ? "내 문서" : source === "sample" ? "예제" : source === "workspace" ? "작업 중" : "브라우저",
+    title: doc.title || "Untitled query",
+    sql_code: doc.sql_code || doc.sql || "",
+    description: doc.description || doc.memo || "",
+    author: doc.author,
+    updated_at: doc.updated_at || doc.created_at,
+  };
+}
+
+function localVisualizerDocs() {
+  const draft = getWorkspaceDraft();
+  const saved = readJSON(STORAGE.docs, []).map(doc => toVisualizerDoc(doc, "local"));
+  return [draft, ...saved].filter(Boolean);
+}
+
+function mergeVisualizerDocs(...groups) {
+  const seen = new Set();
+  return groups.flat().filter(doc => {
+    const key = `${doc.source}:${doc.docId || doc.id}:${doc.sql_code}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return Boolean(doc.sql_code?.trim());
+  });
+}
+
 function schemasFromSql(sql) {
   return splitStatements(sql || "")
     .filter(stmt => /CREATE\s+TABLE/i.test(stmt))
@@ -909,15 +957,16 @@ function ListEmpty({ show, text }) {
 }
 
 function Workspace({ initialRequest, user, setPage, onOpenShared }) {
-  const [sql, setSql] = useState(DEFAULT_SQL);
-  const [docTitle, setDocTitle] = useState("Untitled query");
-  const [docId, setDocId] = useState(null);
+  const restored = getWorkspaceDraft();
+  const [sql, setSql] = useState(() => restored?.sql_code || DEFAULT_SQL);
+  const [docTitle, setDocTitle] = useState(() => restored?.title || "Untitled query");
+  const [docId, setDocId] = useState(() => restored?.docId || null);
   const [sqlDb, setSqlDb] = useState(null);
   const [dbReady, setDbReady] = useState(false);
   const [outputs, setOutputs] = useState([]);
-  const [schemas, setSchemas] = useState([]);
+  const [schemas, setSchemas] = useState(() => schemasFromSql(restored?.sql_code || DEFAULT_SQL));
   const [elapsed, setElapsed] = useState(null);
-  const [activeTab, setActiveTab] = useState("result");
+  const [activeTab, setActiveTab] = useState(() => restored?.activeTab || "result");
   const [showExamples, setShowExamples] = useState(false);
   const [showDocs, setShowDocs] = useState(false);
   const [showSaveChoice, setShowSaveChoice] = useState(false);
@@ -945,13 +994,28 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
     if (initialRequest && initialRequest.id !== consumedRequestId) {
       setSql(initialRequest.sql);
       setDocTitle(initialRequest.title || "Example query");
-      setDocId(null);
+      setDocId(initialRequest.docId || null);
       setOutputs([]);
       setElapsed(null);
       setActiveTab("result");
       setConsumedRequestId(initialRequest.id);
     }
   }, [initialRequest, consumedRequestId]);
+
+  useEffect(() => {
+    const parsed = schemasFromSql(sql);
+    setSchemas(parsed);
+  }, [sql]);
+
+  useEffect(() => {
+    writeJSON(STORAGE.workspace, {
+      docId,
+      docTitle,
+      sql,
+      activeTab,
+      updated_at: new Date().toISOString(),
+    });
+  }, [docId, docTitle, sql, activeTab]);
 
   const explanation = useMemo(() => explainDetailedSQL(sql), [sql]);
   const rowCount = outputs.reduce((sum, out) => sum + (out.type === "table" ? out.data.values.length : 0), 0);
@@ -1699,7 +1763,7 @@ function DocsPage({ user, setPage, loadExample, onOpenShared }) {
               <div style={{ color: C.muted, fontSize: 11, marginTop: 5 }}>작성자 {doc.author || currentName(user)} · 마지막 수정 {formatDate(doc.updated_at)}</div>
             </div>
             <div style={{ display: "flex", gap: 7, flexWrap: "wrap", justifyContent: "flex-end" }}>
-              <Button variant="primary" onClick={() => { loadExample({ title: doc.title, sql: doc.sql_code }); setPage("editor"); }}>열기</Button>
+              <Button variant="primary" onClick={() => { loadExample({ title: doc.title, sql: doc.sql_code, docId: doc.id }); setPage("editor"); }}>열기</Button>
               <Button onClick={() => renameDoc(doc)}>제목 수정</Button>
               <Button onClick={() => downloadSql(doc.title, doc.sql_code)}>다운로드</Button>
               <Button onClick={() => shareDoc(doc)}>공유</Button>
@@ -2025,14 +2089,125 @@ function ConceptsPage({ loadExample }) {
   );
 }
 
-function VisualizerPage({ loadExample }) {
+function getVisualizerSampleDoc() {
+  const sample = EXAMPLES.find(item => item.id === "fk") || EXAMPLES[0];
+  return toVisualizerDoc({ id: "sample-schema", title: sample.title, sql_code: sample.sql, updated_at: new Date().toISOString() }, "sample");
+}
+
+function relationListFromSchemas(schemas) {
+  return schemas.flatMap(schema => (schema.foreignKeys || []).map(fk => ({
+    fromTable: schema.tableName,
+    fromColumn: fk.column,
+    toTable: fk.refTable,
+    toColumn: fk.refColumn,
+  })));
+}
+
+function firstStatement(sql, pattern) {
+  return splitStatements(sql || "").find(stmt => pattern.test(stmt)) || "";
+}
+
+function buildQueryFlow(sql, schemas) {
+  const select = firstStatement(sql, /^SELECT\b/i);
+  if (!select) {
+    return [
+      ["CREATE TABLE", schemas.length ? `${schemas.map(s => s.tableName).join(", ")} 테이블 구조를 읽습니다.` : "CREATE TABLE 문을 찾지 못했습니다.", Boolean(schemas.length)],
+      ["COLUMN", schemas.length ? "컬럼, 타입, 기본키, 외래키를 분리합니다." : "시각화할 컬럼 정보가 없습니다.", Boolean(schemas.length)],
+      ["RELATION", relationListFromSchemas(schemas).length ? "FOREIGN KEY 관계선을 구성합니다." : "외래키 관계가 없거나 아직 정의되지 않았습니다.", relationListFromSchemas(schemas).length > 0],
+      ["VISUALIZE", schemas.length ? "테이블 카드와 관계 목록으로 표시합니다." : "문서에 CREATE TABLE을 추가하면 바로 표시됩니다.", Boolean(schemas.length)],
+    ];
+  }
+
+  const compact = select.replace(/\s+/g, " ");
+  const from = compact.match(/\bFROM\s+([A-Za-z_][\w$#]*)/i)?.[1];
+  const joins = extractJoins(select);
+  const where = compact.match(/\bWHERE\s+(.+?)(?:\bGROUP\s+BY|\bHAVING|\bORDER\s+BY|\bLIMIT|$)/i)?.[1]?.trim();
+  const group = compact.match(/\bGROUP\s+BY\s+(.+?)(?:\bHAVING|\bORDER\s+BY|\bLIMIT|$)/i)?.[1]?.trim();
+  const having = compact.match(/\bHAVING\s+(.+?)(?:\bORDER\s+BY|\bLIMIT|$)/i)?.[1]?.trim();
+  const order = compact.match(/\bORDER\s+BY\s+(.+?)(?:\bLIMIT|$)/i)?.[1]?.trim();
+  return [
+    ["FROM", from ? `${from} 테이블에서 시작합니다.` : "조회 기준 테이블을 찾지 못했습니다.", Boolean(from)],
+    ["JOIN", joins.length ? `${joins.map(join => join.table).join(", ")} 테이블을 연결합니다.` : "JOIN 없이 단일 테이블을 조회합니다.", joins.length > 0],
+    ["WHERE", where ? `${where} 조건에 맞는 행만 남깁니다.` : "WHERE 조건이 없어 모든 행을 유지합니다.", Boolean(where)],
+    ["GROUP BY", group ? `${group} 기준으로 그룹화합니다.` : "그룹화 없이 행 단위로 처리합니다.", Boolean(group)],
+    ["HAVING", having ? `${having} 조건으로 그룹 결과를 필터링합니다.` : "그룹 조건은 사용하지 않습니다.", Boolean(having)],
+    ["SELECT", "필요한 컬럼과 계산 결과를 최종 결과로 만듭니다.", true],
+    ["ORDER BY", order ? `${order} 기준으로 정렬합니다.` : "정렬 조건 없이 DB 기본 순서로 반환됩니다.", Boolean(order)],
+  ];
+}
+
+function extractJoins(sql) {
+  const joins = [];
+  const re = /\b((?:INNER|LEFT|RIGHT|FULL|CROSS)\s+(?:OUTER\s+)?|(?:LEFT|RIGHT|FULL)\s+OUTER\s+)?JOIN\s+([A-Za-z_][\w$#]*)(?:\s+[A-Za-z_][\w$#]*)?(?:\s+ON\s+([^\n;]+?)(?=\b(?:INNER|LEFT|RIGHT|FULL|CROSS)?\s*(?:OUTER\s+)?JOIN\b|\bWHERE\b|\bGROUP\b|\bHAVING\b|\bORDER\b|\bLIMIT\b|$))?/gi;
+  let match;
+  while ((match = re.exec(sql || ""))) {
+    joins.push({
+      type: `${(match[1] || "INNER ").trim()} JOIN`.replace(/\s+/g, " "),
+      table: match[2],
+      condition: (match[3] || "").trim(),
+    });
+  }
+  return joins;
+}
+
+function constraintSummary(schemas) {
+  return schemas.map(schema => {
+    const columns = schema.columns || [];
+    return {
+      tableName: schema.tableName,
+      pk: columns.filter(col => col.pk).map(col => col.name),
+      fk: columns.filter(col => col.fk).map(col => `${col.name} → ${col.refTable}.${col.refColumn}`),
+      notNull: columns.filter(col => col.notNull && !col.pk).map(col => col.name),
+      unique: columns.filter(col => col.unique && !col.pk).map(col => col.name),
+      check: columns.filter(col => col.check).map(col => `${col.name}: ${col.check}`),
+    };
+  });
+}
+
+function VisualizerPage({ loadExample, user }) {
   const [mode, setMode] = useState("erd");
+  const [docs, setDocs] = useState(() => mergeVisualizerDocs(localVisualizerDocs(), [getVisualizerSampleDoc()]));
+  const [selectedId, setSelectedId] = useState(() => docs[0]?.id || "");
+  const [message, setMessage] = useState("");
   const modes = [
     ["erd", "ERD"],
     ["flow", "쿼리 흐름"],
     ["join", "JOIN 그림"],
     ["constraint", "제약조건"],
   ];
+
+  const refreshDocs = useCallback(() => {
+    const localDocs = localVisualizerDocs();
+    const sample = getVisualizerSampleDoc();
+    if (!user || user.local) {
+      setDocs(mergeVisualizerDocs(localDocs, [sample]));
+      setMessage("");
+      return;
+    }
+    setMessage("사이트 문서를 불러오는 중입니다.");
+    api.getDocs()
+      .then(siteDocs => {
+        setDocs(mergeVisualizerDocs(localDocs, siteDocs.map(doc => toVisualizerDoc(doc, "site")), [sample]));
+        setMessage("");
+      })
+      .catch(err => {
+        setDocs(mergeVisualizerDocs(localDocs, [sample]));
+        setMessage(err.message);
+      });
+  }, [user]);
+
+  useEffect(() => { refreshDocs(); }, [refreshDocs]);
+
+  useEffect(() => {
+    if (!selectedId || !docs.some(doc => doc.id === selectedId)) {
+      setSelectedId(docs[0]?.id || "");
+    }
+  }, [docs, selectedId]);
+
+  const selectedDoc = docs.find(doc => doc.id === selectedId) || docs[0] || getVisualizerSampleDoc();
+  const schemas = useMemo(() => schemasFromSql(selectedDoc?.sql_code || ""), [selectedDoc]);
+  const relations = useMemo(() => relationListFromSchemas(schemas), [schemas]);
+  const sqlPreview = selectedDoc?.sql_code || "";
 
   return (
     <main style={{ maxWidth: 1180, margin: "0 auto", padding: "24px 20px 46px", display: "grid", gap: 16 }}>
@@ -2054,36 +2229,98 @@ function VisualizerPage({ loadExample }) {
         </div>
       </section>
 
-      {mode === "erd" && <ErdVisual loadExample={loadExample} />}
-      {mode === "flow" && <QueryFlowVisual loadExample={loadExample} />}
-      {mode === "join" && <JoinVisual loadExample={loadExample} />}
-      {mode === "constraint" && <ConstraintVisual loadExample={loadExample} />}
+      <Panel
+        title="시각화할 문서"
+        action={<Button onClick={refreshDocs}>새로고침</Button>}
+      >
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto", gap: 10, alignItems: "center" }}>
+          <select value={selectedDoc?.id || ""} onChange={event => setSelectedId(event.target.value)} style={{ height: 36, border: `1px solid ${C.line}`, borderRadius: 8, padding: "0 11px", background: C.panel, color: C.text, outline: "none" }}>
+            {docs.map(doc => (
+              <option key={doc.id} value={doc.id}>{doc.sourceLabel} · {doc.title}</option>
+            ))}
+          </select>
+          <Button
+            variant="primary"
+            onClick={() => loadExample({ title: selectedDoc.title, sql: selectedDoc.sql_code, docId: selectedDoc.docId })}
+          >
+            SQL 작성에서 열기
+          </Button>
+        </div>
+        <div style={{ marginTop: 10, display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center", color: C.muted, fontSize: 12 }}>
+          <Badge text={selectedDoc.sourceLabel} tone={selectedDoc.source === "site" ? "success" : "accent"} />
+          <span>{schemas.length} tables</span>
+          <span>{relations.length} relations</span>
+          <span>마지막 수정 {formatDate(selectedDoc.updated_at)}</span>
+          {message && <span style={{ color: C.warn }}>{message}</span>}
+        </div>
+      </Panel>
+
+      {mode === "erd" && <ErdVisual loadExample={loadExample} selectedDoc={selectedDoc} schemas={schemas} relations={relations} />}
+      {mode === "flow" && <QueryFlowVisual loadExample={loadExample} selectedDoc={selectedDoc} sql={sqlPreview} schemas={schemas} />}
+      {mode === "join" && <JoinVisual loadExample={loadExample} selectedDoc={selectedDoc} sql={sqlPreview} />}
+      {mode === "constraint" && <ConstraintVisual loadExample={loadExample} selectedDoc={selectedDoc} schemas={schemas} />}
     </main>
   );
 }
 
-function ErdVisual({ loadExample }) {
+function ErdVisual({ loadExample, selectedDoc, schemas, relations }) {
+  if (!schemas.length) {
+    return (
+      <Panel title="ERD">
+        <EmptyState title="테이블 구조가 없습니다" text="선택한 문서에 CREATE TABLE 문이 있으면 ERD가 바로 표시됩니다." />
+        <Button onClick={() => loadExample(EXAMPLES.find(item => item.id === "fk"))}>FOREIGN KEY 예제로 열기</Button>
+      </Panel>
+    );
+  }
+
   return (
-    <Panel title="테이블 관계도">
-      <div style={{ overflowX: "auto" }}>
-        <div style={{ position: "relative", minWidth: 860, height: 470, background: "#f8fafc", border: `1px solid ${C.lineSoft}`, borderRadius: 9 }}>
-          <svg width="860" height="470" style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
-            <line x1="260" y1="118" x2="360" y2="118" stroke={C.accent} strokeWidth="2" />
-            <line x1="520" y1="208" x2="392" y2="258" stroke={C.accent} strokeWidth="2" />
-            <line x1="612" y1="330" x2="392" y2="330" stroke={C.accent} strokeWidth="2" />
-            <line x1="704" y1="250" x2="520" y2="148" stroke={C.warn} strokeWidth="2" strokeDasharray="6 5" />
-            <text x="286" y="108" fill={C.accent} fontSize="11" fontFamily={C.mono}>1:N</text>
-            <text x="436" y="247" fill={C.accent} fontSize="11" fontFamily={C.mono}>student_id</text>
-            <text x="460" y="349" fill={C.accent} fontSize="11" fontFamily={C.mono}>course_id</text>
-          </svg>
-          {VISUAL_TABLES.map(table => <VisualTable key={table.name} table={table} />)}
+    <Panel title={`ERD · ${selectedDoc.title}`}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(240px, .36fr)", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 12, alignItems: "start" }}>
+          {schemas.map(schema => <SchemaCard key={schema.tableName} schema={schema} />)}
+        </div>
+        <div style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 9, background: C.panelAlt, padding: 12, minHeight: 160 }}>
+          <b style={{ display: "block", marginBottom: 9, fontSize: 12, color: C.text }}>관계</b>
+          <ListEmpty show={!relations.length} text="FOREIGN KEY 관계가 없습니다." />
+          {relations.map(rel => (
+            <div key={`${rel.fromTable}.${rel.fromColumn}`} style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.panel, padding: "9px 10px", marginBottom: 8 }}>
+              <code style={{ color: C.accent, fontSize: 12 }}>{rel.fromTable}.{rel.fromColumn}</code>
+              <div style={{ color: C.muted, fontSize: 11, margin: "4px 0" }}>references</div>
+              <code style={{ color: C.success, fontSize: 12 }}>{rel.toTable}.{rel.toColumn}</code>
+            </div>
+          ))}
         </div>
       </div>
       <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", color: C.sub, fontSize: 12 }}>
-        <span>department → student → enrollment → course 관계를 테이블 카드와 선으로 표현합니다.</span>
-        <Button onClick={() => loadExample(EXAMPLES.find(item => item.id === "fk"))}>FOREIGN KEY 예제로 열기</Button>
+        <span>{selectedDoc.title} 문서의 CREATE TABLE 구조를 기준으로 표시합니다.</span>
+        <Button onClick={() => loadExample({ title: selectedDoc.title, sql: selectedDoc.sql_code, docId: selectedDoc.docId })}>SQL 작성에서 열기</Button>
       </div>
     </Panel>
+  );
+}
+
+function SchemaCard({ schema }) {
+  return (
+    <section style={{ border: `1px solid ${C.darkLine}`, borderRadius: 9, overflow: "hidden", background: C.panel }}>
+      <div style={{ background: C.dark, color: "#fff", padding: "10px 12px", fontFamily: C.mono, fontSize: 13, fontWeight: 800, display: "flex", justifyContent: "space-between" }}>
+        <span>{schema.tableName}</span>
+        <span style={{ color: "#cbd5e1", fontSize: 11 }}>{schema.columns.length} cols</span>
+      </div>
+      {schema.columns.map(col => (
+        <div key={col.name} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 8, padding: "9px 12px", borderTop: `1px solid ${C.lineSoft}`, alignItems: "center" }}>
+          <span style={{ fontFamily: C.mono, fontSize: 12, color: C.text, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+            {col.name} <em style={{ color: C.muted, fontStyle: "normal" }}>{col.type}</em>
+          </span>
+          <span style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            {col.pk && <Badge tone="warn">PK</Badge>}
+            {col.fk && <Badge tone="accent">FK</Badge>}
+            {col.notNull && !col.pk && <Badge>NN</Badge>}
+            {col.unique && !col.pk && <Badge tone="success">UQ</Badge>}
+            {col.check && <Badge tone="success">CHECK</Badge>}
+          </span>
+        </div>
+      ))}
+    </section>
   );
 }
 
@@ -2101,12 +2338,13 @@ function VisualTable({ table }) {
   );
 }
 
-function QueryFlowVisual({ loadExample }) {
+function QueryFlowVisual({ loadExample, selectedDoc, sql, schemas }) {
+  const flow = buildQueryFlow(sql, schemas);
   return (
-    <Panel title="SELECT 처리 흐름">
+    <Panel title={`쿼리 흐름 · ${selectedDoc.title}`}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
-        {QUERY_FLOW.map(([label, desc], idx) => (
-          <div key={label} style={{ border: `1px solid ${C.line}`, background: C.panelAlt, borderRadius: 9, padding: 13, minHeight: 98 }}>
+        {flow.map(([label, desc, active], idx) => (
+          <div key={label} style={{ border: `1px solid ${active ? C.line : C.lineSoft}`, background: active ? C.panelAlt : "#f3f4f6", borderRadius: 9, padding: 13, minHeight: 98, opacity: active ? 1 : .68 }}>
             <span style={{ fontFamily: C.mono, color: C.accent, fontSize: 11, fontWeight: 900 }}>{String(idx + 1).padStart(2, "0")}</span>
             <strong style={{ display: "block", marginTop: 8, fontFamily: C.mono, fontSize: 14 }}>{label}</strong>
             <p style={{ margin: "7px 0 0", color: C.sub, fontSize: 12, lineHeight: 1.45 }}>{desc}</p>
@@ -2114,21 +2352,29 @@ function QueryFlowVisual({ loadExample }) {
         ))}
       </div>
       <div style={{ marginTop: 14, padding: 14, border: `1px solid ${C.lineSoft}`, borderRadius: 9, background: "#fbfdff" }}>
-        <code style={{ whiteSpace: "pre-wrap", fontFamily: C.mono, color: C.text, fontSize: 12 }}>{`SELECT d.name, AVG(s.gpa)
-FROM student s
-JOIN department d ON s.dept_id = d.dept_id
-WHERE s.gpa >= 3.5
-GROUP BY d.name
-ORDER BY AVG(s.gpa) DESC;`}</code>
+        <code style={{ whiteSpace: "pre-wrap", fontFamily: C.mono, color: C.text, fontSize: 12 }}>{firstStatement(sql, /^SELECT\b/i) || firstSqlLine(sql)}</code>
       </div>
-      <Button onClick={() => loadExample(EXAMPLES.find(item => item.id === "join"))} style={{ marginTop: 12 }}>JOIN 예제로 열기</Button>
+      <Button onClick={() => loadExample({ title: selectedDoc.title, sql: selectedDoc.sql_code, docId: selectedDoc.docId })} style={{ marginTop: 12 }}>SQL 작성에서 열기</Button>
     </Panel>
   );
 }
 
-function JoinVisual({ loadExample }) {
+function JoinVisual({ loadExample, selectedDoc, sql }) {
+  const joins = extractJoins(sql);
   return (
-    <Panel title="JOIN 범위 그림">
+    <Panel title={`JOIN 그림 · ${selectedDoc.title}`}>
+      {joins.length > 0 && (
+        <div style={{ marginBottom: 12, display: "grid", gap: 8 }}>
+          {joins.map((join, idx) => (
+            <div key={`${join.table}-${idx}`} style={{ display: "grid", gridTemplateColumns: "120px minmax(0, 1fr)", gap: 10, alignItems: "center", border: `1px solid ${C.lineSoft}`, borderRadius: 8, padding: 10, background: C.panelAlt }}>
+              <Badge tone="accent">{join.type}</Badge>
+              <span style={{ color: C.sub, fontSize: 12 }}>
+                <b style={{ color: C.text }}>{join.table}</b>{join.condition ? ` · ON ${join.condition}` : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 12 }}>
         {JOIN_TYPES.map(([title, subtitle, desc], idx) => (
           <section key={title} style={{ border: `1px solid ${C.line}`, borderRadius: 10, background: C.panelAlt, padding: 15 }}>
@@ -2142,28 +2388,52 @@ function JoinVisual({ loadExample }) {
           </section>
         ))}
       </div>
-      <Button onClick={() => loadExample(EXAMPLES.find(item => item.id === "join"))} style={{ marginTop: 12 }}>JOIN SQL 작성하기</Button>
+      <Button onClick={() => loadExample({ title: selectedDoc.title, sql: selectedDoc.sql_code, docId: selectedDoc.docId })} style={{ marginTop: 12 }}>SQL 작성에서 열기</Button>
     </Panel>
   );
 }
 
-function ConstraintVisual({ loadExample }) {
+function ConstraintVisual({ loadExample, selectedDoc, schemas }) {
+  const summary = constraintSummary(schemas);
+  const hasSchema = summary.length > 0;
   return (
-    <Panel title="INSERT 검증 파이프라인">
-      <div style={{ display: "grid", gap: 10 }}>
-        {CONSTRAINT_STEPS.map(([title, desc], idx) => (
-          <div key={title} style={{ display: "grid", gridTemplateColumns: "44px minmax(0, 1fr)", gap: 12, alignItems: "center" }}>
-            <span style={{ width: 34, height: 34, borderRadius: 999, display: "grid", placeItems: "center", background: idx === CONSTRAINT_STEPS.length - 1 ? "#ecfdf5" : C.accentSoft, color: idx === CONSTRAINT_STEPS.length - 1 ? C.success : C.accent, fontFamily: C.mono, fontWeight: 900, fontSize: 12 }}>{idx + 1}</span>
-            <div style={{ border: `1px solid ${C.line}`, borderRadius: 9, background: C.panelAlt, padding: "11px 13px" }}>
-              <strong style={{ fontFamily: C.mono, fontSize: 13 }}>{title}</strong>
-              <span style={{ marginLeft: 10, color: C.sub, fontSize: 12 }}>{desc}</span>
+    <Panel title={`제약조건 · ${selectedDoc.title}`}>
+      {hasSchema ? (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10 }}>
+          {summary.map(item => (
+            <div key={item.tableName} style={{ border: `1px solid ${C.line}`, borderRadius: 9, background: C.panelAlt, padding: 12 }}>
+              <b style={{ fontFamily: C.mono, fontSize: 13 }}>{item.tableName}</b>
+              {[
+                ["PRIMARY KEY", item.pk, "warn"],
+                ["FOREIGN KEY", item.fk, "accent"],
+                ["NOT NULL", item.notNull, "default"],
+                ["UNIQUE", item.unique, "success"],
+                ["CHECK", item.check, "success"],
+              ].map(([label, values, tone]) => (
+                <div key={label} style={{ marginTop: 9, display: "grid", gap: 4 }}>
+                  <Badge tone={tone}>{label}</Badge>
+                  <span style={{ color: values.length ? C.sub : C.muted, fontSize: 12, lineHeight: 1.5 }}>{values.length ? values.join(", ") : "없음"}</span>
+                </div>
+              ))}
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 10 }}>
+          {CONSTRAINT_STEPS.map(([title, desc], idx) => (
+            <div key={title} style={{ display: "grid", gridTemplateColumns: "44px minmax(0, 1fr)", gap: 12, alignItems: "center" }}>
+              <span style={{ width: 34, height: 34, borderRadius: 999, display: "grid", placeItems: "center", background: idx === CONSTRAINT_STEPS.length - 1 ? "#ecfdf5" : C.accentSoft, color: idx === CONSTRAINT_STEPS.length - 1 ? C.success : C.accent, fontFamily: C.mono, fontWeight: 900, fontSize: 12 }}>{idx + 1}</span>
+              <div style={{ border: `1px solid ${C.line}`, borderRadius: 9, background: C.panelAlt, padding: "11px 13px" }}>
+                <strong style={{ fontFamily: C.mono, fontSize: 13 }}>{title}</strong>
+                <span style={{ marginLeft: 10, color: C.sub, fontSize: 12 }}>{desc}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <Button onClick={() => loadExample({ title: selectedDoc.title, sql: selectedDoc.sql_code, docId: selectedDoc.docId })}>SQL 작성에서 열기</Button>
         <Button onClick={() => loadExample(EXAMPLES.find(item => item.id === "check"))}>CHECK 예제</Button>
-        <Button onClick={() => loadExample(EXAMPLES.find(item => item.id === "notnull"))}>NOT NULL 예제</Button>
         <Button onClick={() => loadExample(EXAMPLES.find(item => item.id === "pk"))}>PRIMARY KEY 예제</Button>
       </div>
     </Panel>
@@ -2239,8 +2509,16 @@ function firstSqlLine(sql) {
   return sql.split("\n").map(line => line.trim()).find(Boolean) || "SQL";
 }
 
+const RESTORABLE_PAGES = new Set(["home", "editor", "visualizer", "concepts", "docs", "shared", "mypage"]);
+
+function initialPage() {
+  const saved = readJSON(STORAGE.page, "");
+  if (RESTORABLE_PAGES.has(saved)) return saved;
+  return getWorkspaceDraft() ? "editor" : "home";
+}
+
 export default function App() {
-  const [page, setPage] = useState("home");
+  const [page, setPage] = useState(initialPage);
   const [incomingSql, setIncomingSql] = useState(null);
   const [user, setUser] = useState(() => authStore.getUser() || readJSON(STORAGE.user, null));
   const [authMessage, setAuthMessage] = useState("");
@@ -2255,6 +2533,10 @@ export default function App() {
       overflowX: "hidden",
     });
   }, []);
+
+  useEffect(() => {
+    if (RESTORABLE_PAGES.has(page)) writeJSON(STORAGE.page, page);
+  }, [page]);
 
   useEffect(() => {
     if (authStore.get()) {
@@ -2297,7 +2579,7 @@ export default function App() {
   }, []);
 
   const loadExample = item => {
-    setIncomingSql({ id: Date.now(), title: item.title, sql: item.sql });
+    setIncomingSql({ id: Date.now(), title: item.title, sql: item.sql, docId: item.docId || null });
     setPage("editor");
   };
 
@@ -2329,7 +2611,7 @@ export default function App() {
       <NavBar page={page} setPage={setPage} user={user} onLogout={handleLogout} />
       {page === "home" && <HomeDashboard setPage={setPage} loadExample={loadExample} />}
       {page === "editor" && <Workspace initialRequest={incomingSql} user={user} setPage={setPage} onOpenShared={openShared} />}
-      {page === "visualizer" && <VisualizerPage loadExample={loadExample} />}
+      {page === "visualizer" && <VisualizerPage loadExample={loadExample} user={user} />}
       {page === "concepts" && <ConceptsPage loadExample={loadExample} />}
       {page === "docs" && <DocsPage user={user} setPage={setPage} loadExample={loadExample} onOpenShared={openShared} />}
       {page === "shared" && <SharedBoard onOpenShared={openShared} />}
