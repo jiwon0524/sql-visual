@@ -11,16 +11,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = Number(process.env.PORT || 3001);
 const PUBLIC_FRONTEND_URL = "https://jiwon0524.github.io/sql-visual/";
-const RENDER_CALLBACK_URL = process.env.RENDER_EXTERNAL_URL ? `${process.env.RENDER_EXTERNAL_URL}/api/auth/naver/callback` : "";
+const PUBLIC_BACKEND_URL = "https://sql-visual.onrender.com";
+const RENDER_CALLBACK_URL = process.env.RENDER_EXTERNAL_URL ? `${process.env.RENDER_EXTERNAL_URL}/api/auth/naver/callback` : `${PUBLIC_BACKEND_URL}/api/auth/naver/callback`;
 const DATA_FILE = process.env.DATA_FILE || join(__dirname, "sqlvisual-data.json");
 
 const CONFIG = {
   JWT_SECRET: process.env.JWT_SECRET || "sqlvisual_jwt_secret_2024",
   NAVER_CLIENT_ID: process.env.NAVER_CLIENT_ID || "YOUR_NAVER_CLIENT_ID",
   NAVER_CLIENT_SECRET: process.env.NAVER_CLIENT_SECRET || "YOUR_NAVER_CLIENT_SECRET",
-  NAVER_CALLBACK_URL: process.env.NAVER_CALLBACK_URL || RENDER_CALLBACK_URL || "http://localhost:3001/api/auth/naver/callback",
+  NAVER_CALLBACK_URL: RENDER_CALLBACK_URL || process.env.NAVER_CALLBACK_URL,
   FRONTEND_URL: process.env.FRONTEND_URL || PUBLIC_FRONTEND_URL,
-  CORS_ORIGINS: process.env.CORS_ORIGINS || "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,https://jiwon0524.github.io",
+  CORS_ORIGINS: process.env.CORS_ORIGINS || "https://jiwon0524.github.io",
 };
 
 const allowedOrigins = CONFIG.CORS_ORIGINS.split(",").map(origin => origin.trim()).filter(Boolean);
@@ -570,6 +571,6 @@ app.get("/api/history", auth, (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`SQLVisual API: http://localhost:${PORT}`);
+  console.log(`SQLVisual API: ${process.env.RENDER_EXTERNAL_URL || PUBLIC_BACKEND_URL}`);
   console.log(`Naver callback URL: ${CONFIG.NAVER_CALLBACK_URL}`);
 });

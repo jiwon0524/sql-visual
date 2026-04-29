@@ -2,7 +2,7 @@
 
 GitHub Pages only serves the React files. Naver OAuth, saved SQL documents, and recent SQL history need this Node backend to run on a public server.
 
-`localhost` is only the current computer. If the frontend is opened from another computer, `http://localhost:3001/api` points to that other computer, not to your development PC.
+The frontend must call the public Render backend. A browser opened on another computer cannot use a backend address that points to the developer's own machine.
 
 ## Recommended Setup
 
@@ -11,7 +11,7 @@ Deploy `backend/` to a public Node host such as Render, Railway, Fly.io, or a VP
 This repository includes `render.yaml` for Render Blueprint deployment. The intended public API URL is:
 
 ```text
-https://jiwon0524-sqlvisual-api.onrender.com/api
+https://sql-visual.onrender.com/api
 ```
 
 The GitHub Pages frontend is configured to use that URL by default in production.
@@ -28,9 +28,9 @@ Set these environment variables on the backend host:
 ```env
 NAVER_CLIENT_ID=your_naver_client_id
 NAVER_CLIENT_SECRET=your_naver_client_secret
-NAVER_CALLBACK_URL=https://jiwon0524-sqlvisual-api.onrender.com/api/auth/naver/callback
-FRONTEND_URL=https://jiwon0524.github.io/sql-visual/
-CORS_ORIGINS=https://jiwon0524.github.io,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174
+NAVER_CALLBACK_URL=https://sql-visual.onrender.com/api/auth/naver/callback
+FRONTEND_URL=https://jiwon0524.github.io/sql-visual
+CORS_ORIGINS=https://jiwon0524.github.io
 JWT_SECRET=replace_with_a_long_random_secret
 ```
 
@@ -41,16 +41,11 @@ Most hosts provide `PORT` automatically. Only set `PORT` manually if your host t
 In the Naver Developers app settings, add:
 
 - Service URL: `https://jiwon0524.github.io`
-- Callback URL: `https://jiwon0524-sqlvisual-api.onrender.com/api/auth/naver/callback`
+- Callback URL: `https://sql-visual.onrender.com/api/auth/naver/callback`
 
 The Naver app key is the service key for SQLVisual. Users do not share your Naver account. When they click Naver login, Naver authenticates their own Naver account and the backend stores a separate SQLVisual user by that account's `naver_id`.
 
 For a public service, make sure the Naver Developers app is configured for real users, not only local development testers. If Naver requires review for your selected profile permissions, complete the Naver Login review/service application before inviting other users.
-
-For local testing on this computer, you can also keep:
-
-- Service URL: `http://127.0.0.1:5174`
-- Callback URL: `http://localhost:3001/api/auth/naver/callback`
 
 The callback URL in Naver Developers must exactly match `NAVER_CALLBACK_URL`.
 
@@ -62,23 +57,7 @@ After the backend is deployed, open the login screen on:
 https://jiwon0524.github.io/sql-visual/
 ```
 
-Enter the public API URL:
-
-```text
-https://jiwon0524-sqlvisual-api.onrender.com/api
-```
-
-The app stores that API URL in the browser. You can also share a setup link:
-
-```text
-https://jiwon0524.github.io/sql-visual/?api=https://jiwon0524-sqlvisual-api.onrender.com/api
-```
-
-For a permanent build-time connection, set this frontend environment variable before running `npm run deploy`:
-
-```env
-VITE_API_BASE_URL=https://jiwon0524-sqlvisual-api.onrender.com/api
-```
+The app is hard-wired to call `https://sql-visual.onrender.com/api` in production so every visitor uses the same public backend.
 
 ## Local Network Preview
 
@@ -89,7 +68,7 @@ cd frontend
 npm run dev:host
 ```
 
-Then open the shown network URL from the other device. OAuth login still needs a backend URL and Naver callback URL that are reachable from that device, so a public backend is the clean path for real login.
+Then open the shown network URL from the other device. OAuth login still uses the public Render backend.
 
 ## Account Switching
 

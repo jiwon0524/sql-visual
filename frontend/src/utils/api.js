@@ -15,27 +15,8 @@ export function normalizeApiBase(value) {
   }
 }
 
-function localApiBase() {
-  if (typeof window === "undefined") return "";
-  const host = window.location.hostname;
-  return host === "localhost" || host === "127.0.0.1" ? "http://localhost:3001/api" : "";
-}
-
-function publicApiBase() {
-  if (typeof window === "undefined") return "";
-  return window.location.hostname === "jiwon0524.github.io" ? "https://jiwon0524-sqlvisual-api.onrender.com/api" : "";
-}
-
-function runtimeApiBase() {
-  if (typeof window === "undefined") return "";
-  const params = new URLSearchParams(window.location.search);
-  const fromUrl = params.get("api");
-  if (fromUrl) localStorage.setItem("sv_api_base", normalizeApiBase(fromUrl));
-  return normalizeApiBase(localStorage.getItem("sv_api_base"));
-}
-
-const DEFAULT_BASE = import.meta.env.DEV ? "http://localhost:3001/api" : (localApiBase() || publicApiBase());
-const BASE = normalizeApiBase(import.meta.env.VITE_API_BASE_URL || runtimeApiBase() || DEFAULT_BASE);
+export const BASE_URL = "https://sql-visual.onrender.com";
+const BASE = normalizeApiBase(BASE_URL);
 
 export const apiBase = BASE;
 
@@ -64,7 +45,7 @@ async function req(method, path, body = null) {
   if (token()) headers.Authorization = `Bearer ${token()}`;
 
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 3500);
+  const timeout = window.setTimeout(() => controller.abort(), 20000);
   try {
     const res = await fetch(BASE + path, {
       method,
@@ -74,12 +55,12 @@ async function req(method, path, body = null) {
     });
     const data = await res.json().catch(() => ({}));
     if (res.status === 404) {
-      throw new Error("백엔드 API가 최신 버전이 아닙니다. 백엔드를 재시작하거나 다시 배포하세요.");
+      throw new Error("백엔드 API가 최신 버전이 아닙니다. Render 배포 상태를 확인하세요.");
     }
     if (!res.ok) throw new Error(data.error || "서버 오류가 발생했습니다.");
     return data;
   } catch (err) {
-    if (err.name === "AbortError") throw new Error("백엔드 API 연결 시간이 초과되었습니다.");
+    if (err.name === "AbortError") throw new Error("백엔드 API 연결 시간이 초과되었습니다. Render 무료 서버가 깨어나는 중이면 잠시 뒤 다시 시도하세요.");
     throw err;
   } finally {
     window.clearTimeout(timeout);

@@ -617,6 +617,19 @@ function getSqlCompatibilityAction(stmt) {
     return { kind: "rewrite", sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name", label: "SHOW TABLES 결과" };
   }
 
+  if (/^SELECT\b/i.test(compact) && (/\bFROM\s+DUAL\b/i.test(compact) || /\bSYSDATE\b/i.test(compact))) {
+    const sql = compact
+      .replace(/\bSYSDATE\b/gi, "datetime('now')")
+      .replace(/\s+FROM\s+DUAL\b/gi, "");
+    return { kind: "rewrite", sql, label: "Oracle SELECT 변환", note: "Oracle의 DUAL/SYSDATE 표현을 브라우저 SQLite에서 실행 가능한 형태로 변환했습니다." };
+  }
+
+  const createOrReplaceView = compact.match(/^CREATE\s+OR\s+REPLACE\s+VIEW\s+([A-Za-z_][\w$#]*)\s+AS\s+([\s\S]+)$/i);
+  if (createOrReplaceView) {
+    const [, viewName, selectSql] = createOrReplaceView;
+    return { kind: "rewrite", sql: `DROP VIEW IF EXISTS ${quoteSqlIdentifier(viewName)}; CREATE VIEW ${quoteSqlIdentifier(viewName)} AS ${selectSql}`, label: "CREATE OR REPLACE VIEW 변환", note: "SQLite에는 OR REPLACE VIEW가 없어 기존 뷰를 지운 뒤 다시 생성합니다." };
+  }
+
   const dropPurge = compact.match(/^DROP\s+TABLE\s+(IF\s+EXISTS\s+)?([A-Za-z_][\w$#]*)\s+PURGE$/i);
   if (dropPurge) {
     return { kind: "rewrite", sql: `DROP TABLE ${dropPurge[1] || ""}${quoteSqlIdentifier(dropPurge[2])}`, label: "DROP TABLE PURGE 변환", note: "SQLite에는 휴지통 개념이 없어 PURGE 옵션을 제외하고 DROP TABLE로 실행합니다." };
@@ -628,6 +641,10 @@ function getSqlCompatibilityAction(stmt) {
 
   if (/^(SET\s+SERVEROUTPUT|SET\s+DEFINE|SET\s+ECHO|SPOOL\b|PROMPT\b)/i.test(compact)) {
     return { kind: "skip", label: "SQL*Plus 명령 건너뜀", note: "이 명령은 SQL 실행문이 아니라 Oracle SQL*Plus 도구 명령이라 브라우저 실행에서는 건너뜁니다." };
+  }
+
+  if (/^(ALTER\s+SESSION|CREATE\s+SEQUENCE|DROP\s+SEQUENCE|COMMENT\s+ON)\b/i.test(compact)) {
+    return { kind: "skip", label: "Oracle 서버 명령 건너뜀", note: "이 Oracle 명령은 서버 객체/세션 설정용입니다. SQLVisual의 브라우저 DB에서는 실행할 대상이 없어 안내 후 건너뜁니다." };
   }
 
   if (/^(GRANT|REVOKE)\b/i.test(upper)) {
@@ -906,9 +923,12 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
   const [showSaveChoice, setShowSaveChoice] = useState(false);
   const [showLoadChoice, setShowLoadChoice] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const [workspaceMessage, setWorkspaceMessage] = useState("");
   const [consumedRequestId, setConsumedRequestId] = useState(null);
   const runRef = useRef(null);
+  const runCurrentRef = useRef(null);
+  const editorRef = useRef(null);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -937,8 +957,7 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
   const rowCount = outputs.reduce((sum, out) => sum + (out.type === "table" ? out.data.values.length : 0), 0);
   const errorCount = outputs.filter(out => out.type === "error").length;
 
-  const runSql = useCallback(() => {
-    const statementBlocks = splitStatementsWithLocations(sql);
+  const executeStatementBlocks = useCallback((statementBlocks, recentSql = sql) => {
     const nextOutputs = [];
     const nextSchemas = [...schemas];
     const start = performance.now();
@@ -1002,22 +1021,75 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
     setSchemas(nextSchemas);
     setElapsed(ms);
     setActiveTab(nextOutputs.some(out => out.type === "error") ? "error" : "result");
-    addRecentSql(docTitle, sql);
+    addRecentSql(docTitle, recentSql);
   }, [docTitle, schemas, sql, sqlDb]);
+
+  const runSql = useCallback(() => {
+    executeStatementBlocks(splitStatementsWithLocations(sql), sql);
+  }, [executeStatementBlocks, sql]);
+
+  const runCurrentSql = useCallback(() => {
+    const selection = editorRef.current?.getSelection?.();
+    const selectedSql = selection && !selection.isEmpty()
+      ? editorRef.current?.getModel?.()?.getValueInRange(selection)?.trim()
+      : "";
+    if (selectedSql) {
+      executeStatementBlocks(splitStatementsWithLocations(selectedSql), selectedSql);
+      return;
+    }
+
+    const statementBlocks = splitStatementsWithLocations(sql);
+    if (!statementBlocks.length) return;
+    const cursorLine = editorRef.current?.getPosition?.()?.lineNumber || 1;
+    const target = statementBlocks.find(block => block.startLine <= cursorLine && cursorLine <= block.endLine)
+      || statementBlocks.find(block => block.startLine >= cursorLine)
+      || statementBlocks[statementBlocks.length - 1];
+    executeStatementBlocks([target], target.stmt);
+  }, [executeStatementBlocks, sql]);
 
   useEffect(() => {
     runRef.current = runSql;
-  }, [runSql]);
+    runCurrentRef.current = runCurrentSql;
+  }, [runSql, runCurrentSql]);
 
   useEffect(() => {
     const handler = event => {
-      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      if (event.key === "F5") {
         event.preventDefault();
         runRef.current?.();
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        runCurrentRef.current?.();
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        setShowSaveChoice(true);
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "o") {
+        event.preventDefault();
+        setShowLoadChoice(true);
+        return;
+      }
+      if (event.key === "F1") {
+        event.preventDefault();
+        setShowShortcuts(true);
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  const handleEditorMount = useCallback((editor, monaco) => {
+    editorRef.current = editor;
+    editor.addCommand(monaco.KeyCode.F5, () => runRef.current?.());
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => runCurrentRef.current?.());
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => setShowSaveChoice(true));
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyO, () => setShowLoadChoice(true));
+    editor.addCommand(monaco.KeyCode.F1, () => setShowShortcuts(true));
   }, []);
 
   const saveLocalDoc = () => {
@@ -1122,6 +1194,7 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
         docTitle={docTitle}
         setDocTitle={setDocTitle}
         onRun={runSql}
+        onRunCurrent={runCurrentSql}
         onSave={() => setShowSaveChoice(true)}
         onLoad={() => setShowLoadChoice(true)}
         onReset={resetWorkspace}
@@ -1129,6 +1202,7 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
         onExamples={() => setShowExamples(true)}
         onClearResults={() => setOutputs([])}
         onShare={() => setShowShareModal(true)}
+        onShortcuts={() => setShowShortcuts(true)}
         elapsed={elapsed}
         rowCount={rowCount}
         errorCount={errorCount}
@@ -1142,6 +1216,7 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
             theme="vs-dark"
             value={sql}
             onChange={value => setSql(value || "")}
+            onMount={handleEditorMount}
             options={{
               minimap: { enabled: false },
               fontFamily: C.mono,
@@ -1195,11 +1270,12 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
         defaultDescription={explanation.summary}
         onSubmit={shareCurrentDoc}
       />
+      <ShortcutModal open={showShortcuts} onClose={() => setShowShortcuts(false)} />
     </main>
   );
 }
 
-function Toolbar({ dbReady, docTitle, setDocTitle, onRun, onSave, onLoad, onReset, onSchema, onExamples, onClearResults, onShare, elapsed, rowCount, errorCount }) {
+function Toolbar({ dbReady, docTitle, setDocTitle, onRun, onRunCurrent, onSave, onLoad, onReset, onSchema, onExamples, onClearResults, onShare, onShortcuts, elapsed, rowCount, errorCount }) {
   return (
     <div style={{ height: 50, borderBottom: `1px solid ${C.line}`, background: C.panel, display: "flex", alignItems: "center", gap: 8, padding: "0 14px", overflowX: "auto", overflowY: "hidden", scrollbarWidth: "thin" }}>
       <input
@@ -1207,14 +1283,16 @@ function Toolbar({ dbReady, docTitle, setDocTitle, onRun, onSave, onLoad, onRese
         onChange={event => setDocTitle(event.target.value)}
         style={{ flex: "0 0 190px", width: 190, height: 30, border: `1px solid ${C.line}`, borderRadius: 7, padding: "0 10px", fontSize: 12, color: C.text, background: C.panelAlt, outline: "none" }}
       />
-      <Button variant="primary" onClick={onRun}>▶ 실행</Button>
-      <Button onClick={onSave}>💾 저장</Button>
-      <Button onClick={onLoad}>📂 불러오기</Button>
-      <Button onClick={onClearResults}>결과 지우기</Button>
-      <Button onClick={onReset}>🗑 초기화</Button>
-      <Button onClick={onExamples}>📋 예제 삽입</Button>
-      <Button onClick={onSchema}>🗂 구조 보기</Button>
-      <Button onClick={onShare}>공유하기</Button>
+      <Button variant="primary" onClick={onRun} title="전체 SQL 실행 (F5)">▶ 전체 실행</Button>
+      <Button onClick={onRunCurrent} title="커서가 있는 SQL 한 문장만 실행 (Ctrl+Enter)">현재 실행</Button>
+      <Button onClick={onSave} title="사이트 저장 또는 .sql 파일 다운로드 (Ctrl+S)">💾 저장</Button>
+      <Button onClick={onLoad} title="사이트 문서 또는 .sql/.txt 파일 불러오기 (Ctrl+O)">📂 불러오기</Button>
+      <Button onClick={onClearResults} title="결과 패널 비우기">결과 지우기</Button>
+      <Button onClick={onReset} title="에디터와 결과 초기화">🗑 초기화</Button>
+      <Button onClick={onExamples} title="Oracle 기준 예제 SQL 삽입">📋 예제 삽입</Button>
+      <Button onClick={onSchema} title="하단 구조 시각화 탭 열기">🗂 구조 보기</Button>
+      <Button onClick={onShare} title="공유 게시판에 현재 SQL 등록">공유하기</Button>
+      <Button onClick={onShortcuts} title="단축키 보기 (F1)">단축키</Button>
       <div style={{ flex: "1 0 12px" }} />
       <Metric label="DB" value={dbReady ? "ready" : "loading"} tone={dbReady ? "success" : "warn"} />
       <Metric label="time" value={elapsed == null ? "-" : `${elapsed}ms`} />
@@ -1283,7 +1361,7 @@ function BottomPanel({ activeTab, setActiveTab, outputs, explanation, schemas, e
 }
 
 function ResultView({ outputs }) {
-  if (!outputs.length) return <EmptyState title="아직 실행된 SQL이 없습니다" text="상단 에디터에서 SQL을 작성한 뒤 실행하세요. Ctrl+Enter도 사용할 수 있습니다." />;
+  if (!outputs.length) return <EmptyState title="아직 실행된 SQL이 없습니다" text="F5로 전체 SQL을 실행하거나 Ctrl+Enter로 현재 SQL 한 문장만 실행하세요." />;
   return (
     <div style={{ padding: 12, display: "grid", gap: 12 }}>
       {outputs.filter(out => out.type !== "error").map((out, idx) => (
@@ -1467,6 +1545,29 @@ function ChoiceModal({ open, title, onClose, choices }) {
             <b style={{ display: "block", fontSize: 13, color: C.text }}>{label}</b>
             <span style={{ display: "block", marginTop: 5, color: C.muted, fontSize: 12, lineHeight: 1.5 }}>{desc}</span>
           </button>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+function ShortcutModal({ open, onClose }) {
+  if (!open) return null;
+  const rows = [
+    ["F5", "전체 SQL 실행"],
+    ["Ctrl/Cmd + Enter", "커서가 있는 SQL 한 문장만 실행"],
+    ["Ctrl/Cmd + S", "저장 위치 선택"],
+    ["Ctrl/Cmd + O", "불러오기 위치 선택"],
+    ["F1", "단축키 안내 열기"],
+  ];
+  return (
+    <Modal title="단축키" onClose={onClose}>
+      <div style={{ display: "grid", gap: 8 }}>
+        {rows.map(([key, desc]) => (
+          <div key={key} style={{ display: "grid", gridTemplateColumns: "150px minmax(0, 1fr)", gap: 10, alignItems: "center", border: `1px solid ${C.lineSoft}`, borderRadius: 8, padding: "9px 10px", background: C.panelAlt }}>
+            <code style={{ color: C.accent, fontWeight: 800, fontSize: 12 }}>{key}</code>
+            <span style={{ color: C.sub, fontSize: 12 }}>{desc}</span>
+          </div>
         ))}
       </div>
     </Modal>

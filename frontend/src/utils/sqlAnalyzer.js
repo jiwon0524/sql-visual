@@ -45,9 +45,27 @@ export function explainSQL(sql) {
     return R;
   }
 
+  if (up.startsWith("SELECT") && (/\bFROM\s+DUAL\b/i.test(s) || /\bSYSDATE\b/i.test(s))) {
+    R.push({ kw: "Oracle SELECT", color: "#2563eb", text: "Oracle의 DUAL 또는 SYSDATE를 사용하는 조회입니다." });
+    R.push({ kw: "SQLite 호환", color: "#64748b", text: "SQLVisual에서는 실행 가능한 SQLite 표현으로 변환합니다." });
+    return R;
+  }
+
+  if (/^CREATE\s+OR\s+REPLACE\s+VIEW\b/i.test(s)) {
+    R.push({ kw: "CREATE OR REPLACE VIEW", color: "#7c3aed", text: "뷰가 없으면 만들고 있으면 대체하는 Oracle식 문법입니다." });
+    R.push({ kw: "SQLite 호환", color: "#64748b", text: "SQLVisual에서는 기존 뷰를 삭제한 뒤 다시 생성하는 방식으로 실행합니다." });
+    return R;
+  }
+
   if (up.startsWith("PURGE") || /DROP\s+TABLE\s+.+\s+PURGE$/i.test(s)) {
     R.push({ kw: "PURGE", color: "#64748b", text: "Oracle에서 삭제된 객체를 휴지통 없이 정리할 때 쓰는 명령입니다." });
     R.push({ kw: "SQLVisual", color: "#64748b", text: "브라우저 SQLite에는 휴지통이 없어 실행할 작업이 없거나 PURGE 옵션을 제외합니다." });
+    return R;
+  }
+
+  if (/^(ALTER\s+SESSION|CREATE\s+SEQUENCE|DROP\s+SEQUENCE|COMMENT\s+ON)\b/i.test(s)) {
+    R.push({ kw: "Oracle 서버 명령", color: "#64748b", text: "Oracle 서버의 세션, 시퀀스, 주석 같은 객체를 다루는 명령입니다." });
+    R.push({ kw: "SQLVisual", color: "#64748b", text: "브라우저 학습 DB에는 서버 객체가 없어 안내 후 건너뜁니다." });
     return R;
   }
 
@@ -261,6 +279,26 @@ function explainOneStatement(stmt, order) {
     };
   }
 
+  if (up.startsWith("SELECT") && (/\bFROM\s+DUAL\b/i.test(s) || /\bSYSDATE\b/i.test(s))) {
+    return {
+      order,
+      summary: "Oracle식 단일 행 조회를 실행합니다.",
+      steps: ["DUAL은 Oracle에서 계산식이나 시스템 값을 조회할 때 쓰는 1행짜리 가상 테이블입니다.", "SQLVisual에서는 DUAL을 제거하고 SYSDATE를 현재 시간 함수로 변환합니다."],
+      tips: ["Oracle에서는 SELECT SYSDATE FROM DUAL처럼 테스트 쿼리를 자주 작성합니다."],
+      cautions: ["실제 날짜 표시 형식은 DBMS와 세션 설정에 따라 달라질 수 있습니다."],
+    };
+  }
+
+  if (/^CREATE\s+OR\s+REPLACE\s+VIEW\b/i.test(s)) {
+    return {
+      order,
+      summary: "Oracle식으로 뷰를 생성하거나 대체합니다.",
+      steps: ["뷰 이름 뒤의 SELECT 문을 저장된 조회 구조로 만듭니다.", "SQLVisual에서는 기존 뷰를 삭제한 뒤 다시 생성하는 방식으로 변환합니다."],
+      tips: ["뷰는 자주 쓰는 JOIN이나 집계 쿼리를 이름 붙여 재사용할 때 좋습니다."],
+      cautions: ["기존 뷰에 의존하는 쿼리가 있다면 변경 전 컬럼 구조를 확인해야 합니다."],
+    };
+  }
+
   if (up.startsWith("PURGE") || /DROP\s+TABLE\s+.+\s+PURGE$/i.test(s)) {
     return {
       order,
@@ -268,6 +306,16 @@ function explainOneStatement(stmt, order) {
       steps: ["Oracle에서는 삭제된 객체를 recycle bin에서 완전히 제거할 때 사용합니다.", "SQLVisual의 브라우저 SQLite에는 recycle bin이 없어 건너뛰거나 PURGE 옵션을 제외합니다."],
       tips: ["학습용 Oracle 스크립트에 PURGE가 있어도 SQLVisual에서는 흐름이 끊기지 않게 처리합니다."],
       cautions: ["실제 Oracle에서 PURGE는 복구 여지를 없앨 수 있으니 신중히 사용해야 합니다."],
+    };
+  }
+
+  if (/^(ALTER\s+SESSION|CREATE\s+SEQUENCE|DROP\s+SEQUENCE|COMMENT\s+ON)\b/i.test(s)) {
+    return {
+      order,
+      summary: "Oracle 서버 객체 또는 세션 설정 명령입니다.",
+      steps: ["이 명령은 일반 테이블 데이터 조회/수정이 아니라 DB 서버의 설정이나 객체를 다룹니다.", "SQLVisual의 브라우저 실행 환경에서는 안내 후 건너뜁니다."],
+      tips: ["Oracle 실습 환경에서는 세션 설정, 시퀀스, 주석도 스키마 설계의 일부로 자주 사용됩니다."],
+      cautions: ["브라우저 SQLite와 실제 Oracle 서버의 지원 범위는 다릅니다."],
     };
   }
 
