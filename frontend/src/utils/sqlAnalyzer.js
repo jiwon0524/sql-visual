@@ -25,6 +25,32 @@ export function explainSQL(sql) {
   const up = s.toUpperCase().replace(/\s+/g, " ");
   const R  = []; // 결과 배열
 
+  if (up.startsWith("TRUNCATE TABLE")) {
+    const tn = s.match(/TRUNCATE\s+TABLE\s+(\w+)/i)?.[1] || "테이블";
+    R.push({ kw: "TRUNCATE", color: "#dc2626", text: `<b>${tn}</b> 테이블의 모든 행을 빠르게 삭제합니다.` });
+    R.push({ kw: "SQLite 호환", color: "#64748b", text: "SQLVisual에서는 SQLite에 맞춰 DELETE FROM으로 변환해 실행합니다." });
+    return R;
+  }
+
+  if (/^(DESC|DESCRIBE)\b/i.test(s)) {
+    const tn = s.match(/^(?:DESC|DESCRIBE)\s+(\w+)/i)?.[1] || "테이블";
+    R.push({ kw: "DESCRIBE", color: "#2563eb", text: `<b>${tn}</b> 테이블의 컬럼 구조를 조회합니다.` });
+    R.push({ kw: "SQLite 호환", color: "#64748b", text: "SQLVisual에서는 PRAGMA table_info 결과로 보여줍니다." });
+    return R;
+  }
+
+  if (up.startsWith("SHOW TABLES") || up.startsWith("SHOW COLUMNS")) {
+    R.push({ kw: "SHOW", color: "#2563eb", text: "DB 안의 테이블 또는 컬럼 목록을 확인합니다." });
+    R.push({ kw: "SQLite 호환", color: "#64748b", text: "SQLVisual에서는 sqlite_master 또는 PRAGMA 조회로 변환합니다." });
+    return R;
+  }
+
+  if (up.startsWith("PURGE") || /DROP\s+TABLE\s+.+\s+PURGE$/i.test(s)) {
+    R.push({ kw: "PURGE", color: "#64748b", text: "Oracle에서 삭제된 객체를 휴지통 없이 정리할 때 쓰는 명령입니다." });
+    R.push({ kw: "SQLVisual", color: "#64748b", text: "브라우저 SQLite에는 휴지통이 없어 실행할 작업이 없거나 PURGE 옵션을 제외합니다." });
+    return R;
+  }
+
   // ── CREATE TABLE ────────────────────────────────────────────────────────────
   if (up.startsWith("CREATE TABLE")) {
     const nm = s.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)/i);
@@ -202,6 +228,48 @@ export function explainDetailedSQL(sql) {
 function explainOneStatement(stmt, order) {
   const s = stmt.trim();
   const up = s.toUpperCase().replace(/\s+/g, " ");
+
+  if (up.startsWith("TRUNCATE TABLE")) {
+    const table = s.match(/TRUNCATE\s+TABLE\s+(\w+)/i)?.[1] || "테이블";
+    return {
+      order,
+      summary: `${table} 테이블의 모든 행을 삭제합니다.`,
+      steps: [`${table} 테이블의 데이터만 비우고 테이블 구조는 유지합니다.`, "SQLVisual에서는 SQLite에 맞춰 DELETE FROM으로 변환해 실행합니다."],
+      tips: ["실무에서는 TRUNCATE가 롤백/권한/트리거 동작에서 DBMS마다 다르게 동작할 수 있어 주의합니다."],
+      cautions: ["WHERE 조건을 줄 수 없으므로 전체 데이터 삭제 의도가 맞는지 확인해야 합니다."],
+    };
+  }
+
+  if (/^(DESC|DESCRIBE)\b/i.test(s)) {
+    const table = s.match(/^(?:DESC|DESCRIBE)\s+(\w+)/i)?.[1] || "테이블";
+    return {
+      order,
+      summary: `${table} 테이블의 컬럼 구조를 확인합니다.`,
+      steps: [`${table} 테이블의 컬럼명, 타입, NULL 허용 여부, 기본키 여부를 조회합니다.`],
+      tips: ["테이블 구조를 모를 때는 먼저 DESCRIBE로 컬럼을 확인한 뒤 SELECT를 작성하면 좋습니다."],
+      cautions: ["DESCRIBE는 DBMS마다 출력 형식이 다릅니다."],
+    };
+  }
+
+  if (up.startsWith("SHOW TABLES") || up.startsWith("SHOW COLUMNS")) {
+    return {
+      order,
+      summary: "DB 구조 목록을 확인합니다.",
+      steps: [up.startsWith("SHOW TABLES") ? "현재 DB에 있는 테이블 목록을 조회합니다." : "지정한 테이블의 컬럼 목록을 조회합니다."],
+      tips: ["MySQL식 SHOW 명령은 SQLVisual에서 SQLite 조회문으로 변환됩니다."],
+      cautions: ["실제 Oracle에서는 SHOW TABLES 대신 USER_TABLES 같은 데이터 딕셔너리 뷰를 사용합니다."],
+    };
+  }
+
+  if (up.startsWith("PURGE") || /DROP\s+TABLE\s+.+\s+PURGE$/i.test(s)) {
+    return {
+      order,
+      summary: "Oracle의 휴지통 정리 명령입니다.",
+      steps: ["Oracle에서는 삭제된 객체를 recycle bin에서 완전히 제거할 때 사용합니다.", "SQLVisual의 브라우저 SQLite에는 recycle bin이 없어 건너뛰거나 PURGE 옵션을 제외합니다."],
+      tips: ["학습용 Oracle 스크립트에 PURGE가 있어도 SQLVisual에서는 흐름이 끊기지 않게 처리합니다."],
+      cautions: ["실제 Oracle에서 PURGE는 복구 여지를 없앨 수 있으니 신중히 사용해야 합니다."],
+    };
+  }
 
   if (up.startsWith("CREATE TABLE")) {
     const schema = parseCreateTable(s);

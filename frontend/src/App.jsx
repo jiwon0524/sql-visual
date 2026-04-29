@@ -577,6 +577,66 @@ function splitStatementsWithLocations(source) {
   return blocks;
 }
 
+function quoteSqlIdentifier(name) {
+  return `"${String(name || "").replace(/"/g, '""')}"`;
+}
+
+function getSqlCompatibilityAction(stmt) {
+  const compact = String(stmt || "").trim().replace(/\s+/g, " ");
+  const upper = compact.toUpperCase();
+
+  if (/^(COMMIT|END)\s*(?:TRANSACTION)?$/i.test(compact)) {
+    return { kind: "commit", label: "트랜잭션 커밋", emptyLabel: "COMMIT 건너뜀", emptyNote: "진행 중인 트랜잭션이 없어 COMMIT을 건너뛰었습니다." };
+  }
+
+  if (/^ROLLBACK\s*(?:TRANSACTION)?$/i.test(compact)) {
+    return { kind: "commit", label: "트랜잭션 롤백", emptyLabel: "ROLLBACK 건너뜀", emptyNote: "진행 중인 트랜잭션이 없어 ROLLBACK을 건너뛰었습니다." };
+  }
+
+  if (/^START\s+TRANSACTION$/i.test(compact)) {
+    return { kind: "rewrite", sql: "BEGIN TRANSACTION", label: "START TRANSACTION 변환", note: "SQLite에서는 START TRANSACTION을 BEGIN TRANSACTION으로 실행합니다." };
+  }
+
+  const truncate = compact.match(/^TRUNCATE\s+TABLE\s+([A-Za-z_][\w$#]*)$/i);
+  if (truncate) {
+    const table = truncate[1];
+    return { kind: "rewrite", sql: `DELETE FROM ${quoteSqlIdentifier(table)}`, label: "TRUNCATE 변환 실행", note: `${table} 테이블의 모든 행을 삭제했습니다. SQLite에는 TRUNCATE가 없어 DELETE FROM으로 실행합니다.` };
+  }
+
+  const describe = compact.match(/^(?:DESC|DESCRIBE)\s+([A-Za-z_][\w$#]*)$/i);
+  if (describe) {
+    return { kind: "rewrite", sql: `PRAGMA table_info(${quoteSqlIdentifier(describe[1])})`, label: "DESCRIBE 결과" };
+  }
+
+  const showColumns = compact.match(/^SHOW\s+COLUMNS\s+FROM\s+([A-Za-z_][\w$#]*)$/i);
+  if (showColumns) {
+    return { kind: "rewrite", sql: `PRAGMA table_info(${quoteSqlIdentifier(showColumns[1])})`, label: "SHOW COLUMNS 결과" };
+  }
+
+  if (/^SHOW\s+TABLES$/i.test(compact)) {
+    return { kind: "rewrite", sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name", label: "SHOW TABLES 결과" };
+  }
+
+  const dropPurge = compact.match(/^DROP\s+TABLE\s+(IF\s+EXISTS\s+)?([A-Za-z_][\w$#]*)\s+PURGE$/i);
+  if (dropPurge) {
+    return { kind: "rewrite", sql: `DROP TABLE ${dropPurge[1] || ""}${quoteSqlIdentifier(dropPurge[2])}`, label: "DROP TABLE PURGE 변환", note: "SQLite에는 휴지통 개념이 없어 PURGE 옵션을 제외하고 DROP TABLE로 실행합니다." };
+  }
+
+  if (/^PURGE\b/i.test(upper)) {
+    return { kind: "skip", label: "PURGE 건너뜀", note: "PURGE는 Oracle 휴지통 정리 명령입니다. 브라우저 SQLite에는 휴지통이 없어 실행할 작업이 없습니다." };
+  }
+
+  if (/^(SET\s+SERVEROUTPUT|SET\s+DEFINE|SET\s+ECHO|SPOOL\b|PROMPT\b)/i.test(compact)) {
+    return { kind: "skip", label: "SQL*Plus 명령 건너뜀", note: "이 명령은 SQL 실행문이 아니라 Oracle SQL*Plus 도구 명령이라 브라우저 실행에서는 건너뜁니다." };
+  }
+
+  if (/^(GRANT|REVOKE)\b/i.test(upper)) {
+    return { kind: "skip", label: "권한 명령 건너뜀", note: "GRANT/REVOKE는 DB 서버 계정 권한 명령입니다. SQLVisual의 브라우저 DB에는 사용자 권한 시스템이 없어 건너뜁니다." };
+  }
+
+  return null;
+}
+
 function findLineContaining(lines, term) {
   const needle = String(term || "").trim().replace(/^["'`]|["'`]$/g, "").toLowerCase();
   if (!needle) return -1;
@@ -888,13 +948,19 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
       if (!stmt.trim()) continue;
 
       try {
-        if (/^(COMMIT|END)\s*(?:TRANSACTION)?$/i.test(stmt.trim())) {
+        const compatibility = getSqlCompatibilityAction(stmt);
+        if (compatibility?.kind === "skip") {
+          nextOutputs.push({ type: "ok", label: compatibility.label, stmt, startLine: block.startLine, endLine: block.endLine, note: compatibility.note });
+          continue;
+        }
+
+        if (compatibility?.kind === "commit") {
           try {
             sqlDb?.exec(stmt);
-            nextOutputs.push({ type: "ok", label: "트랜잭션 커밋", stmt, startLine: block.startLine, endLine: block.endLine });
+            nextOutputs.push({ type: "ok", label: compatibility.label, stmt, startLine: block.startLine, endLine: block.endLine });
           } catch (commitErr) {
             if (/no transaction is active/i.test(commitErr.message || "")) {
-              nextOutputs.push({ type: "ok", label: "COMMIT 건너뜀", stmt, startLine: block.startLine, endLine: block.endLine, note: "진행 중인 트랜잭션이 없어 COMMIT을 건너뛰었습니다." });
+              nextOutputs.push({ type: "ok", label: compatibility.emptyLabel, stmt, startLine: block.startLine, endLine: block.endLine, note: compatibility.emptyNote });
             } else {
               throw commitErr;
             }
@@ -910,9 +976,10 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
           continue;
         }
 
-        const results = sqlDb.exec(stmt);
-        if (results.length > 0) nextOutputs.push({ type: "table", label: "SELECT 결과", stmt, startLine: block.startLine, endLine: block.endLine, data: results[0] });
-        else nextOutputs.push({ type: "ok", label: schema ? "구조 분석 완료" : "실행 완료", stmt, startLine: block.startLine, endLine: block.endLine });
+        const executionSql = compatibility?.kind === "rewrite" ? compatibility.sql : stmt;
+        const results = sqlDb.exec(executionSql);
+        if (results.length > 0) nextOutputs.push({ type: "table", label: compatibility?.label || "SELECT 결과", stmt, startLine: block.startLine, endLine: block.endLine, data: results[0] });
+        else nextOutputs.push({ type: "ok", label: compatibility?.label || (schema ? "구조 분석 완료" : "실행 완료"), stmt, startLine: block.startLine, endLine: block.endLine, note: compatibility?.note });
       } catch (err) {
         const analyzed = analyzeError(stmt, err.message);
         const errorLocation = locateSqlErrorLine(block, err.message, analyzed);
