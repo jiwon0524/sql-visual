@@ -591,6 +591,21 @@ function localToolbarDocs() {
   })).filter(doc => doc.sql_code.trim());
 }
 
+function localHomeDocs() {
+  const draft = getWorkspaceDraft();
+  const saved = readJSON(STORAGE.docs, []).map(doc => ({
+    id: `local:${doc.id}`,
+    docId: `local:${doc.id}`,
+    sourceLabel: "브라우저",
+    title: doc.title || "Untitled query",
+    sql_code: doc.sql_code || doc.sql || "",
+    updated_at: doc.updated_at || doc.created_at,
+  }));
+  return [draft, ...saved]
+    .filter(doc => doc?.sql_code?.trim())
+    .sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
+}
+
 function sharedToolbarDocs(items) {
   return (items || []).map(doc => ({
     key: `shared:${doc.id}`,
@@ -900,10 +915,42 @@ function NavBar({ page, setPage, user, onLogout }) {
   );
 }
 
-function HomeDashboard({ setPage, loadExample }) {
-  const docs = readJSON(STORAGE.docs, []);
-  const recent = readJSON(STORAGE.recent, []);
+function HomeDashboard({ setPage, loadExample, user }) {
+  const [docs, setDocs] = useState(() => localHomeDocs());
+  const [recent, setRecent] = useState(() => readJSON(STORAGE.recent, []));
   const favorites = EXAMPLES.filter(item => ["join", "group", "fk", "check"].includes(item.id));
+
+  const refreshHomeDocs = useCallback(() => {
+    const localDocs = localHomeDocs();
+    if (!user || user.local) {
+      setDocs(localDocs);
+      return;
+    }
+    api.getDocs()
+      .then(items => {
+        const siteDocs = items.map(doc => ({
+          id: `site:${doc.id}`,
+          docId: `site:${doc.id}`,
+          sourceLabel: "내 문서",
+          title: doc.title || "Untitled query",
+          sql_code: doc.sql_code || "",
+          updated_at: doc.updated_at || doc.created_at,
+        })).filter(doc => doc.sql_code.trim());
+        setDocs([...siteDocs, ...localDocs].sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0)));
+      })
+      .catch(() => setDocs(localDocs));
+  }, [user]);
+
+  useEffect(() => {
+    setRecent(readJSON(STORAGE.recent, []));
+    refreshHomeDocs();
+  }, [refreshHomeDocs]);
+
+  const removeRecent = item => {
+    const next = recent.filter(row => !(row.sql === item.sql && row.updated_at === item.updated_at));
+    writeJSON(STORAGE.recent, next);
+    setRecent(next);
+  };
 
   return (
     <main style={{ maxWidth: 1180, margin: "0 auto", padding: "28px 22px 44px", display: "grid", gap: 22 }}>
@@ -928,10 +975,13 @@ function HomeDashboard({ setPage, loadExample }) {
         <Panel title="최근 사용 SQL">
           <ListEmpty show={!recent.length} text="아직 실행 기록이 없습니다." />
           {recent.slice(0, 5).map((item, idx) => (
-            <button key={`${item.updated_at}-${idx}`} onClick={() => loadExample({ title: item.title || "최근 SQL", sql: item.sql })} style={recentRowStyle}>
-              <span style={{ fontFamily: C.mono, fontSize: 11, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title || firstSqlLine(item.sql)}</span>
-              <span style={{ fontSize: 11, color: C.muted }}>{new Date(item.updated_at).toLocaleString("ko-KR")}</span>
-            </button>
+            <div key={`${item.updated_at}-${idx}`} style={{ ...recentRowStyle, gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "center", cursor: "default" }}>
+              <button onClick={() => loadExample({ title: item.title || "최근 SQL", sql: item.sql })} style={{ border: 0, background: "transparent", padding: 0, textAlign: "left", minWidth: 0, cursor: "pointer", display: "grid", gap: 3 }}>
+                <span style={{ fontFamily: C.mono, fontSize: 11, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title || firstSqlLine(item.sql)}</span>
+                <span style={{ fontSize: 11, color: C.muted }}>{new Date(item.updated_at).toLocaleString("ko-KR")}</span>
+              </button>
+              <button onClick={() => removeRecent(item)} title="최근 목록에서 삭제" style={{ border: `1px solid ${C.line}`, background: C.panel, color: C.muted, borderRadius: 6, height: 26, padding: "0 8px", cursor: "pointer", fontSize: 11 }}>삭제</button>
+            </div>
           ))}
         </Panel>
       </section>
@@ -944,7 +994,7 @@ function HomeDashboard({ setPage, loadExample }) {
         </Panel>
         <Panel title="최근 SQL 문서">
           <ListEmpty show={!docs.length} text="저장된 문서가 없습니다." />
-          {docs.slice(0, 4).map(doc => <CompactAction key={doc.id} label={doc.title} sub={new Date(doc.updated_at).toLocaleString("ko-KR")} onClick={() => loadExample({ title: doc.title, sql: doc.sql_code })} />)}
+          {docs.slice(0, 4).map(doc => <CompactAction key={doc.id} label={doc.title} sub={`${doc.sourceLabel || "문서"} · ${new Date(doc.updated_at).toLocaleString("ko-KR")}`} onClick={() => loadExample({ title: doc.title, sql: doc.sql_code, docId: doc.docId })} />)}
         </Panel>
         <Panel title="SQL 개념 바로가기">
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
@@ -1274,8 +1324,12 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
       setPage("login");
       return;
     }
+    const title = window.prompt("사이트에 저장할 문서 이름", docTitle);
+    if (title === null) return;
+    const nextTitle = title.trim() || "Untitled query";
+    setDocTitle(nextTitle);
     try {
-      const payload = { title: docTitle, sql_code: sql, description: explanation.summary || "" };
+      const payload = { title: nextTitle, sql_code: sql, description: explanation.summary || "" };
       const existingSiteId = siteDocId(docId);
       const saved = existingSiteId
         ? await api.saveDoc(existingSiteId, payload)
@@ -1290,7 +1344,11 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
   };
 
   const saveToComputer = () => {
-    downloadSql(docTitle, sql);
+    const title = window.prompt("내 컴퓨터에 저장할 파일 이름", docTitle);
+    if (title === null) return;
+    const nextTitle = title.trim() || "Untitled query";
+    setDocTitle(nextTitle);
+    downloadSql(nextTitle, sql);
     setShowSaveChoice(false);
   };
 
@@ -1341,7 +1399,16 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
     }
   };
 
+  const clearResults = () => {
+    if (!outputs.length) return;
+    if (!window.confirm("실행 결과를 지울까요?")) return;
+    setOutputs([]);
+    setElapsed(null);
+    setActiveTab("result");
+  };
+
   const resetWorkspace = () => {
+    if (!window.confirm("현재 SQL과 실행 결과를 모두 초기화할까요?")) return;
     setSql("");
     setOutputs([]);
     setSchemas([]);
@@ -1366,7 +1433,7 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
         onReset={resetWorkspace}
         onSchema={() => setActiveTab("schema")}
         onExamples={() => setShowExamples(true)}
-        onClearResults={() => setOutputs([])}
+        onClearResults={clearResults}
         onShare={() => setShowShareModal(true)}
         onShortcuts={() => setShowShortcuts(true)}
         elapsed={elapsed}
@@ -2623,6 +2690,7 @@ function upsertSchema(list, schema) {
 }
 
 function addRecentSql(title, sql) {
+  if (!String(sql || "").trim()) return;
   const recent = readJSON(STORAGE.recent, []);
   const next = [{ title, sql, updated_at: new Date().toISOString() }, ...recent.filter(item => item.sql !== sql)].slice(0, 10);
   writeJSON(STORAGE.recent, next);
@@ -2732,7 +2800,7 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: C.bg }}>
       <NavBar page={page} setPage={setPage} user={user} onLogout={handleLogout} />
-      {page === "home" && <HomeDashboard setPage={setPage} loadExample={loadExample} />}
+      {page === "home" && <HomeDashboard setPage={setPage} loadExample={loadExample} user={user} />}
       {page === "editor" && <Workspace initialRequest={incomingSql} user={user} setPage={setPage} onOpenShared={openShared} />}
       {page === "visualizer" && <VisualizerPage loadExample={loadExample} user={user} />}
       {page === "concepts" && <ConceptsPage loadExample={loadExample} />}
