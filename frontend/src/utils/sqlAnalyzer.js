@@ -39,12 +39,12 @@ export function explainSQL(sql) {
       lines.forEach(line => {
         const t = line.trim(); if (!t) return;
         const u2 = t.toUpperCase();
-        if (u2.trimStart().startsWith("PRIMARY KEY")) {
+        if (/^(CONSTRAINT\s+\w+\s+)?PRIMARY\s+KEY\b/i.test(t)) {
           const m = t.match(/PRIMARY\s+KEY\s*\(([^)]+)\)/i);
           if (m) pks = m[1].split(",").map(c => c.trim());
           return;
         }
-        if (u2.trimStart().startsWith("FOREIGN KEY")) {
+        if (/^(CONSTRAINT\s+\w+\s+)?FOREIGN\s+KEY\b/i.test(t)) {
           const m = t.match(/FOREIGN\s+KEY\s*\((\w+)\)\s+REFERENCES\s+(\w+)\s*\((\w+)\)/i);
           if (m) fks.push(`<b>${m[1]}</b> → <b>${m[2]}</b>(<b>${m[3]}</b>) 참조`);
           return;
@@ -429,12 +429,12 @@ export function parseCreateTable(sql) {
     for (const line of lines) {
       const t = line.trim(); if (!t) continue;
       const u = t.toUpperCase().trimStart();
-      if (u.startsWith("PRIMARY KEY")) {
+      if (/^(CONSTRAINT\s+\w+\s+)?PRIMARY\s+KEY\b/i.test(t)) {
         const m = t.match(/PRIMARY\s+KEY\s*\(([^)]+)\)/i);
         if (m) tablePKs = m[1].split(",").map(s => s.trim().toLowerCase());
         continue;
       }
-      if (u.startsWith("FOREIGN KEY")) {
+      if (/^(CONSTRAINT\s+\w+\s+)?FOREIGN\s+KEY\b/i.test(t)) {
         const m = t.match(/FOREIGN\s+KEY\s*\(\s*(\w+)\s*\)\s+REFERENCES\s+(\w+)\s*\(\s*(\w+)\s*\)/i);
         if (m) foreignKeys.push({ column: m[1], refTable: m[2], refColumn: m[3] });
         continue;

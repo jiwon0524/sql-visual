@@ -888,6 +888,20 @@ function Workspace({ initialRequest, user, setPage, onOpenShared }) {
       if (!stmt.trim()) continue;
 
       try {
+        if (/^(COMMIT|END)\s*(?:TRANSACTION)?$/i.test(stmt.trim())) {
+          try {
+            sqlDb?.exec(stmt);
+            nextOutputs.push({ type: "ok", label: "트랜잭션 커밋", stmt, startLine: block.startLine, endLine: block.endLine });
+          } catch (commitErr) {
+            if (/no transaction is active/i.test(commitErr.message || "")) {
+              nextOutputs.push({ type: "ok", label: "COMMIT 건너뜀", stmt, startLine: block.startLine, endLine: block.endLine, note: "진행 중인 트랜잭션이 없어 COMMIT을 건너뛰었습니다." });
+            } else {
+              throw commitErr;
+            }
+          }
+          continue;
+        }
+
         const schema = /CREATE\s+TABLE/i.test(stmt) ? parseCreateTable(stmt) : null;
         if (schema) upsertSchema(nextSchemas, schema);
 
@@ -1211,7 +1225,7 @@ function ResultView({ outputs }) {
             <b style={{ color: out.type === "table" ? C.accent : C.success, fontSize: 12 }}>{out.label}</b>
             <code style={{ color: C.muted, fontSize: 10 }}>{out.stmt.replace(/\s+/g, " ").slice(0, 90)}</code>
           </div>
-          {out.type === "table" ? <TableResult data={out.data} /> : <div style={{ padding: 12, color: C.sub, fontSize: 12 }}>실행이 완료되었습니다.</div>}
+          {out.type === "table" ? <TableResult data={out.data} /> : <div style={{ padding: 12, color: C.sub, fontSize: 12 }}>{out.note || "실행이 완료되었습니다."}</div>}
         </div>
       ))}
     </div>
