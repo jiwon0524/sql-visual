@@ -24,7 +24,7 @@ const CONFIG = {
 const allowedOrigins = CONFIG.CORS_ORIGINS.split(",").map(origin => origin.trim()).filter(Boolean);
 
 function isPlaceholder(value) {
-  return !value || /^(YOUR_|your_|여기에)/.test(value);
+  return !value || /^(YOUR_|your_)/.test(value);
 }
 
 function isNaverConfigured() {
@@ -71,46 +71,154 @@ function withQuery(target, key, value) {
   return url.toString();
 }
 
+function now() {
+  return new Date().toISOString();
+}
+
 function emptyStore() {
-  return { counters: { user: 1, doc: 1, history: 1 }, users: [], docs: [], history: [] };
+  return {
+    counters: { user: 1, doc: 1, history: 1, shared: 1, comment: 1 },
+    users: [],
+    docs: [],
+    history: [],
+    shared_documents: [],
+    comments: [],
+    likes: [],
+  };
+}
+
+function migrateStore(store) {
+  const base = emptyStore();
+  const next = {
+    ...base,
+    ...store,
+    counters: { ...base.counters, ...(store.counters || {}) },
+    users: Array.isArray(store.users) ? store.users : [],
+    docs: Array.isArray(store.docs) ? store.docs : [],
+    history: Array.isArray(store.history) ? store.history : [],
+    shared_documents: Array.isArray(store.shared_documents) ? store.shared_documents : [],
+    comments: Array.isArray(store.comments) ? store.comments : [],
+    likes: Array.isArray(store.likes) ? store.likes : [],
+  };
+
+  next.users = next.users.map(user => ({
+    ...user,
+    display_name: user.display_name ?? null,
+    username: user.username ?? user.display_name ?? null,
+  }));
+  next.docs = next.docs.map(doc => ({
+    description: "",
+    tags: [],
+    is_public: false,
+    shared_id: null,
+    ...doc,
+  }));
+  next.shared_documents = next.shared_documents.map(doc => ({
+    description: "",
+    tags: [],
+    schema: [],
+    is_public: true,
+    view_count: 0,
+    like_count: 0,
+    ...doc,
+  }));
+  return next;
 }
 
 function loadStore() {
   if (!existsSync(DATA_FILE)) return emptyStore();
   try {
-    return { ...emptyStore(), ...JSON.parse(readFileSync(DATA_FILE, "utf8")) };
+    return migrateStore(JSON.parse(readFileSync(DATA_FILE, "utf8")));
   } catch {
     return emptyStore();
   }
 }
 
 function saveStore(store) {
-  writeFileSync(DATA_FILE, JSON.stringify(store, null, 2));
+  writeFileSync(DATA_FILE, JSON.stringify(migrateStore(store), null, 2));
 }
 
-function now() {
-  return new Date().toISOString();
+function publicUser(user) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    email: user.email || null,
+    display_name: user.display_name || null,
+    username: user.display_name || user.username || null,
+    profile_image: user.profile_image || null,
+    created_at: user.created_at,
+    updated_at: user.updated_at,
+    needs_display_name: !user.display_name,
+  };
+}
+
+function signUser(user) {
+  return jwt.sign(publicUser(user), CONFIG.JWT_SECRET, { expiresIn: "7d" });
+}
+
+function findUser(store, id) {
+  return store.users.find(item => item.id === Number(id));
 }
 
 function auth(req, res, next) {
   const token = req.headers.authorization?.split(" ")[1];
-  if (!token) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!token) return res.status(401).json({ error: "Login required." });
   try {
     req.user = jwt.verify(token, CONFIG.JWT_SECRET);
     next();
   } catch {
-    res.status(401).json({ error: "인증이 만료되었습니다. 다시 로그인하세요." });
+    res.status(401).json({ error: "Session expired. Please log in again." });
   }
+}
+
+function optionalAuth(req, res, next) {
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return next();
+  try {
+    req.user = jwt.verify(token, CONFIG.JWT_SECRET);
+  } catch {
+    req.user = null;
+  }
+  next();
+}
+
+function tagList(value) {
+  if (Array.isArray(value)) return value.map(item => String(item).trim()).filter(Boolean).slice(0, 8);
+  return String(value || "").split(",").map(item => item.trim()).filter(Boolean).slice(0, 8);
+}
+
+function docSummary(doc, store) {
+  const owner = findUser(store, doc.user_id);
+  return {
+    ...doc,
+    author: owner?.display_name || owner?.username || "SQLVisual user",
+  };
+}
+
+function sharedSummary(doc, store) {
+  const owner = findUser(store, doc.owner_id);
+  const comments_count = store.comments.filter(item => item.shared_document_id === doc.id).length;
+  const like_count = store.likes.filter(item => item.shared_document_id === doc.id).length || doc.like_count || 0;
+  return {
+    ...doc,
+    author: owner?.display_name || owner?.username || "SQLVisual user",
+    comments_count,
+    like_count,
+  };
+}
+
+function ownsShared(doc, userId) {
+  return doc && doc.owner_id === Number(userId);
 }
 
 app.use(cors({
   origin(origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error(`CORS 차단: ${origin}`));
+    return callback(new Error(`CORS blocked: ${origin}`));
   },
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/health", (req, res) => {
   res.json({ ok: true, service: "SQLVisual API", naverConfigured: isNaverConfigured(), store: "json" });
@@ -118,7 +226,7 @@ app.get("/api/health", (req, res) => {
 
 app.get("/api/auth/naver", (req, res) => {
   if (!isNaverConfigured()) {
-    return res.status(503).json({ error: "NAVER_CLIENT_ID와 NAVER_CLIENT_SECRET 환경변수를 설정해야 합니다." });
+    return res.status(503).json({ error: "NAVER_CLIENT_ID and NAVER_CLIENT_SECRET are required." });
   }
 
   const returnTo = safeReturnTo(req.query.returnTo);
@@ -129,9 +237,7 @@ app.get("/api/auth/naver", (req, res) => {
     redirect_uri: CONFIG.NAVER_CALLBACK_URL,
     state,
   };
-  if (req.query.authType === "reauthenticate") {
-    params.auth_type = "reauthenticate";
-  }
+  if (req.query.authType === "reauthenticate") params.auth_type = "reauthenticate";
   res.json({ url: `https://nid.naver.com/oauth2.0/authorize?${new URLSearchParams(params)}` });
 });
 
@@ -155,90 +261,296 @@ app.get("/api/auth/naver/callback", async (req, res) => {
       headers: { Authorization: `Bearer ${tokenRes.data.access_token}` },
     });
 
-    const { id: naverId, nickname, email, profile_image } = profileRes.data.response;
+    const { id: naverId, email, profile_image } = profileRes.data.response;
     const store = loadStore();
     const stamp = now();
     let user = store.users.find(item => item.naver_id === naverId);
 
     if (user) {
-      Object.assign(user, { username: nickname || "사용자", email, profile_image, updated_at: stamp });
+      Object.assign(user, { email, profile_image, updated_at: stamp });
     } else {
-      user = { id: store.counters.user++, naver_id: naverId, username: nickname || "사용자", email, profile_image, created_at: stamp, updated_at: stamp };
-      store.users.push(user);
-      store.docs.push({
-        id: store.counters.doc++,
-        user_id: user.id,
-        title: "첫 번째 문서",
-        sql_code: "-- SQL 작성을 시작해보세요.\n\nCREATE TABLE student (\n  student_id INT PRIMARY KEY,\n  name VARCHAR(50) NOT NULL,\n  age INT\n);\n\nSELECT * FROM student;",
-        memo: "",
+      user = {
+        id: store.counters.user++,
+        naver_id: naverId,
+        email,
+        display_name: null,
+        username: null,
+        profile_image,
         created_at: stamp,
         updated_at: stamp,
-      });
+      };
+      store.users.push(user);
     }
 
     saveStore(store);
-    const appToken = jwt.sign({ id: user.id, username: user.username, email: user.email, profile_image: user.profile_image }, CONFIG.JWT_SECRET, { expiresIn: "7d" });
-    res.redirect(withQuery(returnTo, "token", appToken));
+    res.redirect(withQuery(returnTo, "token", signUser(user)));
   } catch (err) {
-    console.error("네이버 OAuth 오류:", err.response?.data || err.message);
+    console.error("Naver OAuth error:", err.response?.data || err.message);
     res.redirect(withQuery(returnTo, "error", "oauth_failed"));
   }
 });
 
-app.get("/api/auth/me", auth, (req, res) => {
-  const user = loadStore().users.find(item => item.id === req.user.id);
-  if (!user) return res.status(404).json({ error: "사용자를 찾을 수 없습니다." });
-  res.json({ id: user.id, username: user.username, email: user.email, profile_image: user.profile_image, created_at: user.created_at });
+app.get("/api/me", auth, (req, res) => {
+  const user = findUser(loadStore(), req.user.id);
+  if (!user) return res.status(404).json({ error: "User not found." });
+  res.json(publicUser(user));
 });
 
-app.get("/api/docs", auth, (req, res) => {
-  const docs = loadStore().docs
+app.get("/api/auth/me", auth, (req, res) => {
+  const user = findUser(loadStore(), req.user.id);
+  if (!user) return res.status(404).json({ error: "User not found." });
+  res.json(publicUser(user));
+});
+
+app.patch("/api/me/display-name", auth, (req, res) => {
+  const displayName = String(req.body.display_name || "").trim().slice(0, 40);
+  if (displayName.length < 2) return res.status(400).json({ error: "Display name must be at least 2 characters." });
+
+  const store = loadStore();
+  const user = findUser(store, req.user.id);
+  if (!user) return res.status(404).json({ error: "User not found." });
+  user.display_name = displayName;
+  user.username = displayName;
+  user.updated_at = now();
+  saveStore(store);
+  res.json({ user: publicUser(user), token: signUser(user) });
+});
+
+function listDocuments(req, res) {
+  const store = loadStore();
+  const docs = store.docs
     .filter(doc => doc.user_id === req.user.id)
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-    .map(({ sql_code, ...doc }) => doc);
+    .map(doc => docSummary(doc, store));
   res.json(docs);
-});
+}
 
-app.get("/api/docs/:id", auth, (req, res) => {
-  const doc = loadStore().docs.find(item => item.id === Number(req.params.id) && item.user_id === req.user.id);
-  if (!doc) return res.status(404).json({ error: "문서를 찾을 수 없습니다." });
-  res.json(doc);
-});
+function getDocument(req, res) {
+  const store = loadStore();
+  const doc = store.docs.find(item => item.id === Number(req.params.id) && item.user_id === req.user.id);
+  if (!doc) return res.status(404).json({ error: "Document not found." });
+  res.json(docSummary(doc, store));
+}
 
-app.post("/api/docs", auth, (req, res) => {
+function createDocument(req, res) {
   const store = loadStore();
   const stamp = now();
   const doc = {
     id: store.counters.doc++,
     user_id: req.user.id,
-    title: req.body.title || "새 문서",
+    title: String(req.body.title || "Untitled query").trim().slice(0, 120),
     sql_code: req.body.sql_code || "",
-    memo: req.body.memo || "",
+    memo: req.body.memo || req.body.description || "",
+    description: req.body.description || req.body.memo || "",
+    tags: tagList(req.body.tags),
+    is_public: false,
+    shared_id: null,
     created_at: stamp,
     updated_at: stamp,
   };
   store.docs.push(doc);
   saveStore(store);
-  res.status(201).json(doc);
-});
+  res.status(201).json(docSummary(doc, store));
+}
 
-app.put("/api/docs/:id", auth, (req, res) => {
+function patchDocument(req, res) {
   const store = loadStore();
   const doc = store.docs.find(item => item.id === Number(req.params.id) && item.user_id === req.user.id);
-  if (!doc) return res.status(404).json({ error: "문서를 찾을 수 없습니다." });
-  if (req.body.title !== undefined) doc.title = req.body.title;
-  if (req.body.sql_code !== undefined) doc.sql_code = req.body.sql_code;
-  if (req.body.memo !== undefined) doc.memo = req.body.memo;
+  if (!doc) return res.status(404).json({ error: "Document not found." });
+  if (req.body.title !== undefined) doc.title = String(req.body.title || "Untitled query").trim().slice(0, 120);
+  if (req.body.sql_code !== undefined) doc.sql_code = String(req.body.sql_code || "");
+  if (req.body.memo !== undefined) doc.memo = String(req.body.memo || "");
+  if (req.body.description !== undefined) doc.description = String(req.body.description || "");
+  if (req.body.tags !== undefined) doc.tags = tagList(req.body.tags);
   doc.updated_at = now();
+  saveStore(store);
+  res.json(docSummary(doc, store));
+}
+
+function deleteDocument(req, res) {
+  const store = loadStore();
+  const before = store.docs.length;
+  store.docs = store.docs.filter(item => !(item.id === Number(req.params.id) && item.user_id === req.user.id));
+  if (store.docs.length === before) return res.status(404).json({ error: "Document not found." });
+  saveStore(store);
+  res.json({ ok: true });
+}
+
+app.get("/api/documents", auth, listDocuments);
+app.post("/api/documents", auth, createDocument);
+app.get("/api/documents/:id", auth, getDocument);
+app.patch("/api/documents/:id", auth, patchDocument);
+app.delete("/api/documents/:id", auth, deleteDocument);
+app.get("/api/docs", auth, listDocuments);
+app.post("/api/docs", auth, createDocument);
+app.get("/api/docs/:id", auth, getDocument);
+app.put("/api/docs/:id", auth, patchDocument);
+app.delete("/api/docs/:id", auth, deleteDocument);
+
+app.post("/api/shared", auth, (req, res) => {
+  const store = loadStore();
+  const stamp = now();
+  const shared = {
+    id: store.counters.shared++,
+    owner_id: req.user.id,
+    title: String(req.body.title || "Untitled shared SQL").trim().slice(0, 120),
+    sql_code: req.body.sql_code || "",
+    description: req.body.description || "",
+    tags: tagList(req.body.tags),
+    schema: Array.isArray(req.body.schema) ? req.body.schema : [],
+    is_public: req.body.is_public !== false,
+    view_count: 0,
+    like_count: 0,
+    created_at: stamp,
+    updated_at: stamp,
+  };
+  store.shared_documents.push(shared);
+  if (req.body.document_id) {
+    const doc = store.docs.find(item => item.id === Number(req.body.document_id) && item.user_id === req.user.id);
+    if (doc) {
+      doc.is_public = shared.is_public;
+      doc.shared_id = shared.id;
+      doc.updated_at = stamp;
+    }
+  }
+  saveStore(store);
+  res.status(201).json(sharedSummary(shared, store));
+});
+
+app.get("/api/shared", optionalAuth, (req, res) => {
+  const store = loadStore();
+  const q = String(req.query.q || "").trim().toLowerCase();
+  const tag = String(req.query.tag || "").trim().toLowerCase();
+  const sort = String(req.query.sort || "latest");
+  let docs = store.shared_documents.filter(doc => doc.is_public || ownsShared(doc, req.user?.id));
+  if (q) docs = docs.filter(doc => `${doc.title} ${doc.description} ${doc.sql_code} ${doc.tags.join(" ")}`.toLowerCase().includes(q));
+  if (tag) docs = docs.filter(doc => doc.tags.map(item => item.toLowerCase()).includes(tag));
+  docs = docs.map(doc => sharedSummary(doc, store));
+  docs.sort((a, b) => {
+    if (sort === "popular") return (b.like_count + b.view_count + b.comments_count) - (a.like_count + a.view_count + a.comments_count);
+    return b.updated_at.localeCompare(a.updated_at);
+  });
+  res.json(docs);
+});
+
+app.get("/api/shared/:id", optionalAuth, (req, res) => {
+  const store = loadStore();
+  const doc = store.shared_documents.find(item => item.id === Number(req.params.id));
+  if (!doc || (!doc.is_public && !ownsShared(doc, req.user?.id))) return res.status(404).json({ error: "Shared document not found." });
+  doc.view_count = Number(doc.view_count || 0) + 1;
+  doc.updated_at = doc.updated_at || doc.created_at;
+  saveStore(store);
+  res.json(sharedSummary(doc, store));
+});
+
+app.patch("/api/shared/:id", auth, (req, res) => {
+  const store = loadStore();
+  const doc = store.shared_documents.find(item => item.id === Number(req.params.id));
+  if (!ownsShared(doc, req.user.id)) return res.status(404).json({ error: "Shared document not found." });
+  if (req.body.title !== undefined) doc.title = String(req.body.title || "Untitled shared SQL").trim().slice(0, 120);
+  if (req.body.sql_code !== undefined) doc.sql_code = String(req.body.sql_code || "");
+  if (req.body.description !== undefined) doc.description = String(req.body.description || "");
+  if (req.body.tags !== undefined) doc.tags = tagList(req.body.tags);
+  if (req.body.schema !== undefined) doc.schema = Array.isArray(req.body.schema) ? req.body.schema : [];
+  if (req.body.is_public !== undefined) doc.is_public = Boolean(req.body.is_public);
+  doc.updated_at = now();
+  saveStore(store);
+  res.json(sharedSummary(doc, store));
+});
+
+app.delete("/api/shared/:id", auth, (req, res) => {
+  const store = loadStore();
+  const doc = store.shared_documents.find(item => item.id === Number(req.params.id));
+  if (!ownsShared(doc, req.user.id)) return res.status(404).json({ error: "Shared document not found." });
+  store.shared_documents = store.shared_documents.filter(item => item.id !== doc.id);
+  store.comments = store.comments.filter(item => item.shared_document_id !== doc.id);
+  store.likes = store.likes.filter(item => item.shared_document_id !== doc.id);
   saveStore(store);
   res.json({ ok: true });
 });
 
-app.delete("/api/docs/:id", auth, (req, res) => {
+app.post("/api/shared/:id/copy", auth, (req, res) => {
   const store = loadStore();
-  const before = store.docs.length;
-  store.docs = store.docs.filter(item => !(item.id === Number(req.params.id) && item.user_id === req.user.id));
-  if (store.docs.length === before) return res.status(404).json({ error: "문서를 찾을 수 없습니다." });
+  const shared = store.shared_documents.find(item => item.id === Number(req.params.id) && item.is_public);
+  if (!shared) return res.status(404).json({ error: "Shared document not found." });
+  const stamp = now();
+  const doc = {
+    id: store.counters.doc++,
+    user_id: req.user.id,
+    title: `${shared.title} copy`,
+    sql_code: shared.sql_code,
+    memo: shared.description || "",
+    description: shared.description || "",
+    tags: [...(shared.tags || [])],
+    is_public: false,
+    shared_id: null,
+    created_at: stamp,
+    updated_at: stamp,
+  };
+  store.docs.push(doc);
+  saveStore(store);
+  res.status(201).json(docSummary(doc, store));
+});
+
+app.post("/api/shared/:id/like", auth, (req, res) => {
+  const store = loadStore();
+  const shared = store.shared_documents.find(item => item.id === Number(req.params.id) && item.is_public);
+  if (!shared) return res.status(404).json({ error: "Shared document not found." });
+  const existing = store.likes.find(item => item.shared_document_id === shared.id && item.user_id === req.user.id);
+  if (existing) store.likes = store.likes.filter(item => item !== existing);
+  else store.likes.push({ shared_document_id: shared.id, user_id: req.user.id, created_at: now() });
+  saveStore(store);
+  res.json(sharedSummary(shared, store));
+});
+
+app.get("/api/shared/:id/comments", optionalAuth, (req, res) => {
+  const store = loadStore();
+  const shared = store.shared_documents.find(item => item.id === Number(req.params.id) && (item.is_public || ownsShared(item, req.user?.id)));
+  if (!shared) return res.status(404).json({ error: "Shared document not found." });
+  const comments = store.comments
+    .filter(comment => comment.shared_document_id === shared.id)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at))
+    .map(comment => ({ ...comment, author: findUser(store, comment.user_id)?.display_name || "SQLVisual user" }));
+  res.json(comments);
+});
+
+app.post("/api/shared/:id/comments", auth, (req, res) => {
+  const content = String(req.body.content || "").trim();
+  if (!content) return res.status(400).json({ error: "Comment content is required." });
+  const store = loadStore();
+  const shared = store.shared_documents.find(item => item.id === Number(req.params.id) && item.is_public);
+  if (!shared) return res.status(404).json({ error: "Shared document not found." });
+  const stamp = now();
+  const comment = {
+    id: store.counters.comment++,
+    shared_document_id: shared.id,
+    user_id: req.user.id,
+    content: content.slice(0, 1000),
+    created_at: stamp,
+    updated_at: stamp,
+  };
+  store.comments.push(comment);
+  saveStore(store);
+  res.status(201).json({ ...comment, author: findUser(store, req.user.id)?.display_name || "SQLVisual user" });
+});
+
+app.patch("/api/comments/:id", auth, (req, res) => {
+  const content = String(req.body.content || "").trim();
+  if (!content) return res.status(400).json({ error: "Comment content is required." });
+  const store = loadStore();
+  const comment = store.comments.find(item => item.id === Number(req.params.id) && item.user_id === req.user.id);
+  if (!comment) return res.status(404).json({ error: "Comment not found." });
+  comment.content = content.slice(0, 1000);
+  comment.updated_at = now();
+  saveStore(store);
+  res.json({ ...comment, author: findUser(store, req.user.id)?.display_name || "SQLVisual user" });
+});
+
+app.delete("/api/comments/:id", auth, (req, res) => {
+  const store = loadStore();
+  const before = store.comments.length;
+  store.comments = store.comments.filter(item => !(item.id === Number(req.params.id) && item.user_id === req.user.id));
+  if (store.comments.length === before) return res.status(404).json({ error: "Comment not found." });
   saveStore(store);
   res.json({ ok: true });
 });

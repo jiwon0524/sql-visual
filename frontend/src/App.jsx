@@ -32,6 +32,8 @@ const STORAGE = {
   user: "sv_user",
 };
 
+const LOCAL_USER = { id: "local", display_name: "체험 사용자", username: "체험 사용자", local: true };
+
 let sqlJsRuntimePromise;
 
 function loadSqlJsRuntime() {
@@ -470,6 +472,50 @@ function writeJSON(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
+function currentName(user) {
+  return user?.display_name || user?.username || "사용자";
+}
+
+function formatDate(value) {
+  if (!value) return "-";
+  return new Date(value).toLocaleString("ko-KR", { dateStyle: "medium", timeStyle: "short" });
+}
+
+function fileNameFromTitle(title) {
+  const safe = String(title || "sqlvisual-query").trim().replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, "_");
+  return `${safe || "sqlvisual-query"}.sql`;
+}
+
+function downloadSql(title, sql) {
+  const blob = new Blob([sql || ""], { type: "text/sql;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileNameFromTitle(title);
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function parseTags(value) {
+  return String(value || "").split(",").map(tag => tag.trim()).filter(Boolean).slice(0, 8);
+}
+
+function tagText(tags) {
+  return Array.isArray(tags) ? tags.join(", ") : (tags || "");
+}
+
+function schemasFromSql(sql) {
+  return splitStatements(sql || "")
+    .filter(stmt => /CREATE\s+TABLE/i.test(stmt))
+    .map(stmt => {
+      try { return parseCreateTable(stmt); }
+      catch { return null; }
+    })
+    .filter(Boolean);
+}
+
 function Button({ children, onClick, variant = "default", disabled, title, style }) {
   const variants = {
     default: { background: C.panel, color: C.text, border: `1px solid ${C.line}` },
@@ -513,8 +559,10 @@ function NavBar({ page, setPage, user, onLogout }) {
     ["editor", "SQL 작성"],
     ["visualizer", "시각화"],
     ["concepts", "개념"],
-    ["docs", "문서"],
+    ["docs", "내 문서"],
+    ["shared", "공유 게시판"],
   ];
+  if (user && !user.local) items.push(["mypage", "마이페이지"]);
 
   return (
     <header style={{ height: 50, borderBottom: `1px solid ${C.line}`, background: C.panel, display: "flex", alignItems: "center", padding: "0 clamp(10px, 3vw, 18px)", gap: 10, overflow: "hidden" }}>
@@ -548,7 +596,7 @@ function NavBar({ page, setPage, user, onLogout }) {
       </nav>
       {user ? (
         <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "0 0 auto" }}>
-          <span style={{ fontSize: 12, color: C.sub, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.username || "사용자"}</span>
+          <button onClick={() => user.local ? setPage("login") : setPage("mypage")} style={{ border: 0, background: "transparent", color: C.sub, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer", fontSize: 12 }}>{currentName(user)}</button>
           <Button variant="ghost" onClick={onLogout}>로그아웃</Button>
         </div>
       ) : (
@@ -667,7 +715,7 @@ function ListEmpty({ show, text }) {
   return <div style={{ padding: "18px 8px", color: C.muted, fontSize: 12, textAlign: "center" }}>{text}</div>;
 }
 
-function Workspace({ initialRequest }) {
+function Workspace({ initialRequest, user, setPage, onOpenShared }) {
   const [sql, setSql] = useState(DEFAULT_SQL);
   const [docTitle, setDocTitle] = useState("Untitled query");
   const [docId, setDocId] = useState(null);
@@ -679,8 +727,13 @@ function Workspace({ initialRequest }) {
   const [activeTab, setActiveTab] = useState("result");
   const [showExamples, setShowExamples] = useState(false);
   const [showDocs, setShowDocs] = useState(false);
+  const [showSaveChoice, setShowSaveChoice] = useState(false);
+  const [showLoadChoice, setShowLoadChoice] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [workspaceMessage, setWorkspaceMessage] = useState("");
   const [consumedRequestId, setConsumedRequestId] = useState(null);
   const runRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     loadSqlJsRuntime()
@@ -758,19 +811,43 @@ function Workspace({ initialRequest }) {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  const saveDoc = () => {
+  const saveLocalDoc = () => {
     const docs = readJSON(STORAGE.docs, []);
-    const now = new Date().toISOString();
+    const stamp = new Date().toISOString();
     if (docId) {
       const idx = docs.findIndex(doc => doc.id === docId);
-      if (idx >= 0) docs[idx] = { ...docs[idx], title: docTitle, sql_code: sql, updated_at: now };
-      else docs.unshift({ id: docId, title: docTitle, sql_code: sql, created_at: now, updated_at: now });
+      if (idx >= 0) docs[idx] = { ...docs[idx], title: docTitle, sql_code: sql, updated_at: stamp };
+      else docs.unshift({ id: docId, title: docTitle, sql_code: sql, created_at: stamp, updated_at: stamp });
     } else {
       const id = String(Date.now());
-      docs.unshift({ id, title: docTitle, sql_code: sql, created_at: now, updated_at: now });
+      docs.unshift({ id, title: docTitle, sql_code: sql, created_at: stamp, updated_at: stamp });
       setDocId(id);
     }
     writeJSON(STORAGE.docs, docs);
+  };
+
+  const saveSiteDoc = async () => {
+    if (!user || user.local) {
+      setWorkspaceMessage("사이트 저장은 네이버 로그인이 필요합니다.");
+      setPage("login");
+      return;
+    }
+    try {
+      const payload = { title: docTitle, sql_code: sql, description: explanation.summary || "" };
+      const saved = docId && /^\d+$/.test(String(docId))
+        ? await api.saveDoc(docId, payload)
+        : await api.createDoc(payload);
+      setDocId(saved.id);
+      setWorkspaceMessage("사이트에 저장했습니다.");
+      setShowSaveChoice(false);
+    } catch (err) {
+      setWorkspaceMessage(err.message);
+    }
+  };
+
+  const saveToComputer = () => {
+    downloadSql(docTitle, sql);
+    setShowSaveChoice(false);
   };
 
   const loadDoc = doc => {
@@ -779,6 +856,45 @@ function Workspace({ initialRequest }) {
     setSql(doc.sql_code);
     setShowDocs(false);
     setActiveTab("result");
+  };
+
+  const loadSqlFile = event => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setSql(String(reader.result || ""));
+      setDocTitle(file.name.replace(/\.(sql|txt)$/i, "") || "Imported SQL");
+      setDocId(null);
+      setShowLoadChoice(false);
+      setActiveTab("result");
+      event.target.value = "";
+    };
+    reader.readAsText(file, "utf-8");
+  };
+
+  const shareCurrentDoc = async ({ title, description, tags, isPublic }) => {
+    if (!user || user.local) {
+      setWorkspaceMessage("공유 등록은 네이버 로그인이 필요합니다.");
+      setPage("login");
+      return;
+    }
+    try {
+      const shared = await api.createShared({
+        document_id: docId,
+        title,
+        sql_code: sql,
+        description,
+        tags,
+        schema: schemas.length ? schemas : schemasFromSql(sql),
+        is_public: isPublic,
+      });
+      setShowShareModal(false);
+      setWorkspaceMessage("공유 게시판에 등록했습니다.");
+      onOpenShared(shared.id);
+    } catch (err) {
+      setWorkspaceMessage(err.message);
+    }
   };
 
   const resetWorkspace = () => {
@@ -797,12 +913,13 @@ function Workspace({ initialRequest }) {
         docTitle={docTitle}
         setDocTitle={setDocTitle}
         onRun={runSql}
-        onSave={saveDoc}
-        onLoad={() => setShowDocs(true)}
+        onSave={() => setShowSaveChoice(true)}
+        onLoad={() => setShowLoadChoice(true)}
         onReset={resetWorkspace}
         onSchema={() => setActiveTab("schema")}
         onExamples={() => setShowExamples(true)}
         onClearResults={() => setOutputs([])}
+        onShare={() => setShowShareModal(true)}
         elapsed={elapsed}
         rowCount={rowCount}
         errorCount={errorCount}
@@ -840,13 +957,40 @@ function Workspace({ initialRequest }) {
         />
       </section>
 
+      {workspaceMessage && <div style={{ position: "fixed", right: 18, bottom: 18, zIndex: 900, background: C.dark, color: "#fff", borderRadius: 8, padding: "10px 12px", fontSize: 12 }}>{workspaceMessage}</div>}
+      <input ref={fileInputRef} type="file" accept=".sql,.txt,text/plain" onChange={loadSqlFile} style={{ display: "none" }} />
       <ExampleModal open={showExamples} onClose={() => setShowExamples(false)} onPick={item => { setSql(item.sql); setDocTitle(item.title); setShowExamples(false); }} />
       <DocsModal open={showDocs} onClose={() => setShowDocs(false)} onLoad={loadDoc} />
+      <ChoiceModal
+        open={showSaveChoice}
+        title="어디에 저장할까요?"
+        onClose={() => setShowSaveChoice(false)}
+        choices={[
+          ["사이트에 저장", "로그인 계정의 내 문서에 저장합니다.", saveSiteDoc],
+          ["내 컴퓨터에 파일로 저장", `${fileNameFromTitle(docTitle)} 파일로 다운로드합니다.`, saveToComputer],
+        ]}
+      />
+      <ChoiceModal
+        open={showLoadChoice}
+        title="어디에서 불러올까요?"
+        onClose={() => setShowLoadChoice(false)}
+        choices={[
+          ["사이트 문서 불러오기", "로그인 계정에 저장된 문서 목록을 엽니다.", () => { setShowLoadChoice(false); setShowDocs(true); }],
+          ["컴퓨터 파일 불러오기", ".sql 또는 .txt 파일을 에디터에 삽입합니다.", () => fileInputRef.current?.click()],
+        ]}
+      />
+      <ShareModal
+        open={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        title={docTitle}
+        defaultDescription={explanation.summary}
+        onSubmit={shareCurrentDoc}
+      />
     </main>
   );
 }
 
-function Toolbar({ dbReady, docTitle, setDocTitle, onRun, onSave, onLoad, onReset, onSchema, onExamples, onClearResults, elapsed, rowCount, errorCount }) {
+function Toolbar({ dbReady, docTitle, setDocTitle, onRun, onSave, onLoad, onReset, onSchema, onExamples, onClearResults, onShare, elapsed, rowCount, errorCount }) {
   return (
     <div style={{ height: 50, borderBottom: `1px solid ${C.line}`, background: C.panel, display: "flex", alignItems: "center", gap: 8, padding: "0 14px", overflowX: "auto", overflowY: "hidden", scrollbarWidth: "thin" }}>
       <input
@@ -857,10 +1001,11 @@ function Toolbar({ dbReady, docTitle, setDocTitle, onRun, onSave, onLoad, onRese
       <Button variant="primary" onClick={onRun}>▶ 실행</Button>
       <Button onClick={onSave}>💾 저장</Button>
       <Button onClick={onLoad}>📂 불러오기</Button>
-      <Button onClick={onReset}>🗑 초기화</Button>
-      <Button onClick={onSchema}>🗂 구조 보기</Button>
-      <Button onClick={onExamples}>📋 예제 삽입</Button>
       <Button onClick={onClearResults}>결과 지우기</Button>
+      <Button onClick={onReset}>🗑 초기화</Button>
+      <Button onClick={onExamples}>📋 예제 삽입</Button>
+      <Button onClick={onSchema}>🗂 구조 보기</Button>
+      <Button onClick={onShare}>공유하기</Button>
       <div style={{ flex: "1 0 12px" }} />
       <Metric label="DB" value={dbReady ? "ready" : "loading"} tone={dbReady ? "success" : "warn"} />
       <Metric label="time" value={elapsed == null ? "-" : `${elapsed}ms`} />
@@ -1034,14 +1179,14 @@ function SchemaView({ schemas }) {
   );
 }
 
-function Badge({ text, tone = "default" }) {
+function Badge({ text, children, tone = "default" }) {
   const tones = {
     default: ["#f3f4f6", C.sub],
     accent: [C.accentSoft, C.accent],
     success: ["#ecfdf5", C.success],
     warn: ["#fffbeb", C.warn],
   };
-  return <span style={{ background: tones[tone][0], color: tones[tone][1], borderRadius: 5, padding: "2px 5px", fontSize: 10, fontWeight: 800 }}>{text}</span>;
+  return <span style={{ background: tones[tone][0], color: tones[tone][1], borderRadius: 5, padding: "2px 5px", fontSize: 10, fontWeight: 800 }}>{text ?? children}</span>;
 }
 
 function EmptyState({ title, text }) {
@@ -1067,12 +1212,80 @@ function ExampleModal({ open, onClose, onPick }) {
 }
 
 function DocsModal({ open, onClose, onLoad }) {
-  const docs = readJSON(STORAGE.docs, []);
+  const [docs, setDocs] = useState([]);
+  const [message, setMessage] = useState("");
+  useEffect(() => {
+    if (!open) return;
+    if (!authStore.get()) {
+      setDocs([]);
+      setMessage("사이트 문서 불러오기는 로그인이 필요합니다.");
+      return;
+    }
+    setMessage("문서를 불러오는 중입니다.");
+    api.getDocs()
+      .then(items => { setDocs(items); setMessage(""); })
+      .catch(err => { setDocs([]); setMessage(err.message); });
+  }, [open]);
   if (!open) return null;
   return (
     <Modal title="문서 불러오기" onClose={onClose}>
-      <ListEmpty show={!docs.length} text="저장된 문서가 없습니다." />
-      {docs.map(doc => <CompactAction key={doc.id} label={doc.title} sub={new Date(doc.updated_at).toLocaleString("ko-KR")} onClick={() => onLoad(doc)} />)}
+      {message && <p style={{ margin: "0 0 12px", color: C.muted, fontSize: 12 }}>{message}</p>}
+      <ListEmpty show={!message && !docs.length} text="저장된 문서가 없습니다." />
+      {docs.map(doc => <CompactAction key={doc.id} label={doc.title} sub={`${doc.author || "나"} · ${formatDate(doc.updated_at)}`} onClick={() => onLoad(doc)} />)}
+    </Modal>
+  );
+}
+
+function ChoiceModal({ open, title, onClose, choices }) {
+  if (!open) return null;
+  return (
+    <Modal title={title} onClose={onClose}>
+      <div style={{ display: "grid", gap: 10 }}>
+        {choices.map(([label, desc, action]) => (
+          <button key={label} onClick={action} style={{ border: `1px solid ${C.line}`, background: C.panelAlt, borderRadius: 8, padding: 13, textAlign: "left", cursor: "pointer" }}>
+            <b style={{ display: "block", fontSize: 13, color: C.text }}>{label}</b>
+            <span style={{ display: "block", marginTop: 5, color: C.muted, fontSize: 12, lineHeight: 1.5 }}>{desc}</span>
+          </button>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+function ShareModal({ open, onClose, title, defaultDescription, onSubmit }) {
+  const [shareTitle, setShareTitle] = useState(title || "");
+  const [description, setDescription] = useState(defaultDescription || "");
+  const [tags, setTags] = useState("table, sql");
+  const [isPublic, setIsPublic] = useState(true);
+
+  useEffect(() => {
+    if (!open) return;
+    setShareTitle(title || "");
+    setDescription(defaultDescription || "");
+  }, [open, title, defaultDescription]);
+
+  if (!open) return null;
+  return (
+    <Modal title="공유하기" onClose={onClose}>
+      <div style={{ display: "grid", gap: 10 }}>
+        <label style={{ display: "grid", gap: 5, color: C.sub, fontSize: 12 }}>
+          제목
+          <input value={shareTitle} onChange={event => setShareTitle(event.target.value)} style={{ height: 34, border: `1px solid ${C.line}`, borderRadius: 7, padding: "0 10px" }} />
+        </label>
+        <label style={{ display: "grid", gap: 5, color: C.sub, fontSize: 12 }}>
+          설명
+          <textarea value={description} onChange={event => setDescription(event.target.value)} rows={4} style={{ border: `1px solid ${C.line}`, borderRadius: 7, padding: 10, resize: "vertical" }} />
+        </label>
+        <label style={{ display: "grid", gap: 5, color: C.sub, fontSize: 12 }}>
+          태그
+          <input value={tags} onChange={event => setTags(event.target.value)} placeholder="join, erd, constraint" style={{ height: 34, border: `1px solid ${C.line}`, borderRadius: 7, padding: "0 10px" }} />
+        </label>
+        <label style={{ display: "flex", gap: 8, alignItems: "center", color: C.sub, fontSize: 12 }}>
+          <input type="checkbox" checked={isPublic} onChange={event => setIsPublic(event.target.checked)} />
+          공유 게시판에 공개
+        </label>
+        <Button variant="primary" onClick={() => onSubmit({ title: shareTitle, description, tags: parseTags(tags), isPublic })}>공유 등록</Button>
+      </div>
     </Modal>
   );
 }
@@ -1091,27 +1304,313 @@ function Modal({ title, onClose, children, wide }) {
   );
 }
 
-function DocsPage({ setPage, loadExample }) {
-  const [docs, setDocs] = useState(() => readJSON(STORAGE.docs, []));
-  const removeDoc = id => {
-    const next = docs.filter(doc => doc.id !== id);
-    setDocs(next);
-    writeJSON(STORAGE.docs, next);
+function DocsPage({ user, setPage, loadExample, onOpenShared }) {
+  const [docs, setDocs] = useState([]);
+  const [message, setMessage] = useState("");
+
+  const refresh = useCallback(() => {
+    if (!user || user.local) {
+      setDocs([]);
+      setMessage("사이트 저장 문서는 네이버 로그인 후 사용할 수 있습니다.");
+      return;
+    }
+    setMessage("문서를 불러오는 중입니다.");
+    api.getDocs()
+      .then(items => { setDocs(items); setMessage(""); })
+      .catch(err => { setDocs([]); setMessage(err.message); });
+  }, [user]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const renameDoc = async doc => {
+    const title = window.prompt("문서 제목", doc.title);
+    if (!title || title === doc.title) return;
+    try {
+      await api.saveDoc(doc.id, { title });
+      refresh();
+    } catch (err) {
+      setMessage(err.message);
+    }
   };
+
+  const removeDoc = async id => {
+    if (!window.confirm("문서를 삭제할까요?")) return;
+    try {
+      await api.deleteDoc(id);
+      refresh();
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const shareDoc = async doc => {
+    const description = window.prompt("공유 설명", doc.description || doc.memo || "");
+    if (description === null) return;
+    try {
+      const shared = await api.createShared({
+        document_id: doc.id,
+        title: doc.title,
+        sql_code: doc.sql_code,
+        description,
+        tags: doc.tags || [],
+        schema: schemasFromSql(doc.sql_code),
+        is_public: true,
+      });
+      onOpenShared(shared.id);
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
   return (
-    <main style={{ maxWidth: 900, margin: "0 auto", padding: 24 }}>
-      <Panel title="문서">
-        <ListEmpty show={!docs.length} text="저장된 문서가 없습니다." />
+    <main style={{ maxWidth: 1080, margin: "0 auto", padding: 24, display: "grid", gap: 14 }}>
+      <Panel title="내 문서" action={<Button onClick={refresh}>새로고침</Button>}>
+        {message && <p style={{ margin: "0 0 12px", color: C.muted, fontSize: 12 }}>{message}</p>}
+        <ListEmpty show={!message && !docs.length} text="저장된 문서가 없습니다." />
         {docs.map(doc => (
-          <div key={doc.id} style={{ display: "flex", alignItems: "center", gap: 10, border: `1px solid ${C.lineSoft}`, borderRadius: 8, padding: 12, marginBottom: 8, background: C.panelAlt }}>
+          <div key={doc.id} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12, alignItems: "center", border: `1px solid ${C.lineSoft}`, borderRadius: 8, padding: 12, marginBottom: 8, background: C.panelAlt }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <b style={{ color: C.text, fontSize: 13 }}>{doc.title}</b>
-              <div style={{ color: C.muted, fontSize: 11, marginTop: 3 }}>{new Date(doc.updated_at).toLocaleString("ko-KR")}</div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <b style={{ color: C.text, fontSize: 13 }}>{doc.title}</b>
+                <Badge text={doc.is_public ? "PUBLIC" : "PRIVATE"} tone={doc.is_public ? "success" : "default"} />
+              </div>
+              <div style={{ color: C.muted, fontSize: 11, marginTop: 5 }}>작성자 {doc.author || currentName(user)} · 마지막 수정 {formatDate(doc.updated_at)}</div>
             </div>
-            <Button variant="primary" onClick={() => { loadExample({ title: doc.title, sql: doc.sql_code }); setPage("editor"); }}>열기</Button>
-            <Button variant="danger" onClick={() => removeDoc(doc.id)}>삭제</Button>
+            <div style={{ display: "flex", gap: 7, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <Button variant="primary" onClick={() => { loadExample({ title: doc.title, sql: doc.sql_code }); setPage("editor"); }}>열기</Button>
+              <Button onClick={() => renameDoc(doc)}>제목 수정</Button>
+              <Button onClick={() => downloadSql(doc.title, doc.sql_code)}>다운로드</Button>
+              <Button onClick={() => shareDoc(doc)}>공유</Button>
+              <Button variant="danger" onClick={() => removeDoc(doc.id)}>삭제</Button>
+            </div>
           </div>
         ))}
+      </Panel>
+    </main>
+  );
+}
+
+function SharedBoard({ onOpenShared }) {
+  const [items, setItems] = useState([]);
+  const [query, setQuery] = useState("");
+  const [tag, setTag] = useState("");
+  const [sort, setSort] = useState("latest");
+  const [message, setMessage] = useState("");
+
+  const refresh = useCallback(() => {
+    setMessage("공유 문서를 불러오는 중입니다.");
+    api.getShared({ q: query, tag, sort })
+      .then(data => { setItems(data); setMessage(""); })
+      .catch(err => { setItems([]); setMessage(err.message); });
+  }, [query, tag, sort]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const tags = useMemo(() => {
+    const all = items.flatMap(item => item.tags || []);
+    return [...new Set(all)].slice(0, 12);
+  }, [items]);
+
+  return (
+    <main style={{ maxWidth: 1180, margin: "0 auto", padding: "24px 20px 46px", display: "grid", gap: 16 }}>
+      <section style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 22 }}>공유 게시판</h1>
+          <p style={{ margin: "8px 0 0", color: C.sub, fontSize: 13 }}>다른 사용자의 SQL 문서와 테이블 설계를 참고하고 토론합니다.</p>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input value={query} onChange={event => setQuery(event.target.value)} placeholder="제목, 설명, SQL 검색" style={{ width: 240, height: 34, border: `1px solid ${C.line}`, borderRadius: 8, padding: "0 11px", outline: "none" }} />
+          <select value={sort} onChange={event => setSort(event.target.value)} style={{ height: 34, border: `1px solid ${C.line}`, borderRadius: 8, padding: "0 10px", background: C.panel }}>
+            <option value="latest">최신순</option>
+            <option value="popular">인기순</option>
+          </select>
+          <Button onClick={refresh}>검색</Button>
+        </div>
+      </section>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button onClick={() => setTag("")} style={{ border: `1px solid ${C.line}`, background: !tag ? C.dark : C.panel, color: !tag ? "#fff" : C.sub, borderRadius: 999, padding: "6px 10px", cursor: "pointer", fontSize: 12 }}>전체</button>
+        {tags.map(item => <button key={item} onClick={() => setTag(item)} style={{ border: `1px solid ${C.line}`, background: tag === item ? C.dark : C.panel, color: tag === item ? "#fff" : C.sub, borderRadius: 999, padding: "6px 10px", cursor: "pointer", fontSize: 12 }}>{item}</button>)}
+      </div>
+
+      <Panel title="공개 SQL 문서">
+        {message && <p style={{ margin: "0 0 12px", color: C.muted, fontSize: 12 }}>{message}</p>}
+        <ListEmpty show={!message && !items.length} text="공유된 문서가 없습니다." />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))", gap: 12 }}>
+          {items.map(item => (
+            <button key={item.id} onClick={() => onOpenShared(item.id)} style={{ border: `1px solid ${C.lineSoft}`, background: C.panelAlt, borderRadius: 9, padding: 14, textAlign: "left", cursor: "pointer", display: "grid", gap: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                <b style={{ color: C.text, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title}</b>
+                <span style={{ color: C.muted, fontSize: 11, whiteSpace: "nowrap" }}>{formatDate(item.created_at)}</span>
+              </div>
+              <p style={{ margin: 0, color: C.sub, fontSize: 12, lineHeight: 1.5, minHeight: 36 }}>{item.description || "설명이 없습니다."}</p>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{(item.tags || []).map(t => <Badge key={t} text={t} tone="accent" />)}</div>
+              <div style={{ display: "flex", justifyContent: "space-between", color: C.muted, fontSize: 11 }}>
+                <span>{item.author}</span>
+                <span>조회 {item.view_count || 0} · 좋아요 {item.like_count || 0} · 댓글 {item.comments_count || 0}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      </Panel>
+    </main>
+  );
+}
+
+function SharedDetail({ id, user, setPage, loadExample }) {
+  const [doc, setDoc] = useState(null);
+  const [comments, setComments] = useState([]);
+  const [comment, setComment] = useState("");
+  const [message, setMessage] = useState("");
+
+  const refresh = useCallback(() => {
+    if (!id) return;
+    setMessage("공유 문서를 불러오는 중입니다.");
+    Promise.all([api.getSharedDoc(id), api.getComments(id)])
+      .then(([detail, nextComments]) => {
+        setDoc(detail);
+        setComments(nextComments);
+        setMessage("");
+      })
+      .catch(err => setMessage(err.message));
+  }, [id]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const copyToWorkspace = async () => {
+    if (!doc) return;
+    if (user && !user.local) {
+      try { await api.copyShared(doc.id); }
+      catch { /* copying to the editor still works without server copy */ }
+    }
+    loadExample({ title: doc.title, sql: doc.sql_code });
+    setPage("editor");
+  };
+
+  const addComment = async () => {
+    if (!user || user.local) {
+      setMessage("댓글 작성은 네이버 로그인이 필요합니다.");
+      return;
+    }
+    if (!comment.trim()) return;
+    try {
+      await api.createComment(id, comment);
+      setComment("");
+      refresh();
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const removeComment = async commentId => {
+    try {
+      await api.deleteComment(commentId);
+      refresh();
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const schemas = doc?.schema?.length ? doc.schema : schemasFromSql(doc?.sql_code || "");
+
+  return (
+    <main style={{ maxWidth: 1180, margin: "0 auto", padding: "24px 20px 46px", display: "grid", gap: 16 }}>
+      <Button onClick={() => setPage("shared")} style={{ justifySelf: "start" }}>공유 게시판으로</Button>
+      {message && <p style={{ margin: 0, color: C.warn, fontSize: 12 }}>{message}</p>}
+      {doc && (
+        <>
+          <Panel title={doc.title} action={<Button variant="primary" onClick={copyToWorkspace}>내 작업공간으로 복사</Button>}>
+            <p style={{ margin: "0 0 12px", color: C.sub, fontSize: 13, lineHeight: 1.6 }}>{doc.description || "설명이 없습니다."}</p>
+            <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 12 }}>
+              {(doc.tags || []).map(t => <Badge key={t} text={t} tone="accent" />)}
+              <span style={{ color: C.muted, fontSize: 11 }}>작성자 {doc.author} · 조회 {doc.view_count || 0} · 좋아요 {doc.like_count || 0}</span>
+            </div>
+            <pre style={{ margin: 0, padding: 14, background: C.dark, color: "#e5e7eb", borderRadius: 8, overflow: "auto", fontFamily: C.mono, fontSize: 12, lineHeight: 1.65 }}>{doc.sql_code}</pre>
+          </Panel>
+          <Panel title="테이블 구조 시각화">
+            <SchemaView schemas={schemas} />
+          </Panel>
+          <Panel title={`댓글 ${comments.length}`}>
+            <div style={{ display: "grid", gap: 10 }}>
+              {comments.map(item => (
+                <div key={item.id} style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 8, padding: 11, background: C.panelAlt }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+                    <b style={{ fontSize: 12 }}>{item.author}</b>
+                    <span style={{ color: C.muted, fontSize: 11 }}>{formatDate(item.updated_at)}</span>
+                  </div>
+                  <p style={{ margin: 0, color: C.sub, fontSize: 12, lineHeight: 1.6 }}>{item.content}</p>
+                  {user?.id === item.user_id && <Button variant="ghost" onClick={() => removeComment(item.id)} style={{ marginTop: 6 }}>삭제</Button>}
+                </div>
+              ))}
+              <textarea value={comment} onChange={event => setComment(event.target.value)} rows={3} placeholder={user && !user.local ? "의견을 남겨보세요." : "댓글 작성은 로그인이 필요합니다."} style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, resize: "vertical" }} />
+              <Button variant="primary" onClick={addComment} disabled={!user || user.local}>댓글 작성</Button>
+            </div>
+          </Panel>
+        </>
+      )}
+    </main>
+  );
+}
+
+function MyPage({ user, onUserUpdate }) {
+  const [displayName, setDisplayName] = useState(currentName(user));
+  const [message, setMessage] = useState("");
+
+  useEffect(() => setDisplayName(currentName(user)), [user]);
+
+  const save = async () => {
+    try {
+      const result = await api.updateDisplayName(displayName);
+      authStore.save(result.token);
+      onUserUpdate(result.user);
+      setMessage("표시 이름을 저장했습니다.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  if (!user || user.local) {
+    return <main style={{ maxWidth: 520, margin: "0 auto", padding: 24 }}><Panel title="마이페이지"><ListEmpty show text="네이버 로그인 후 사용할 수 있습니다." /></Panel></main>;
+  }
+
+  return (
+    <main style={{ maxWidth: 620, margin: "0 auto", padding: 24, display: "grid", gap: 14 }}>
+      <Panel title="마이페이지">
+        <div style={{ display: "grid", gap: 12 }}>
+          <label style={{ display: "grid", gap: 5, color: C.sub, fontSize: 12 }}>
+            표시 이름
+            <input value={displayName} onChange={event => setDisplayName(event.target.value)} style={{ height: 36, border: `1px solid ${C.line}`, borderRadius: 8, padding: "0 11px" }} />
+          </label>
+          <div style={{ color: C.muted, fontSize: 12 }}>네이버 이메일은 내부 식별용으로만 사용됩니다. {user.email || ""}</div>
+          <Button variant="primary" onClick={save} style={{ justifySelf: "start" }}>저장</Button>
+          {message && <p style={{ margin: 0, color: C.warn, fontSize: 12 }}>{message}</p>}
+        </div>
+      </Panel>
+    </main>
+  );
+}
+
+function DisplayNameSetup({ user, onComplete }) {
+  const [displayName, setDisplayName] = useState("");
+  const [message, setMessage] = useState("");
+
+  const save = async () => {
+    try {
+      const result = await api.updateDisplayName(displayName);
+      authStore.save(result.token);
+      onComplete(result.user);
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  return (
+    <main style={{ maxWidth: 420, margin: "60px auto", padding: 20 }}>
+      <Panel title="표시 이름 설정">
+        <p style={{ margin: "0 0 14px", color: C.sub, fontSize: 13, lineHeight: 1.6 }}>SQLVisual에서 사용할 이름을 정해주세요. 게시판, 문서 작성자명, 상단바에 이 이름이 표시됩니다.</p>
+        <input value={displayName} onChange={event => setDisplayName(event.target.value)} onKeyDown={event => { if (event.key === "Enter") save(); }} placeholder="예: Jiwon" style={{ width: "100%", height: 36, border: `1px solid ${C.line}`, borderRadius: 8, padding: "0 11px", marginBottom: 10 }} />
+        <Button variant="primary" onClick={save} style={{ width: "100%" }}>시작하기</Button>
+        {message && <p style={{ margin: "12px 0 0", color: C.warn, fontSize: 12 }}>{message}</p>}
       </Panel>
     </main>
   );
@@ -1395,7 +1894,7 @@ function LoginPage({ onLogin, authMessage }) {
     <main style={{ maxWidth: 420, margin: "60px auto", padding: 20 }}>
       <Panel title="로그인">
         <Button variant="primary" onClick={naverLogin} disabled={apiStatus !== "online"} style={{ width: "100%" }}>네이버 로그인</Button>
-        <Button onClick={() => onLogin({ username: "체험 사용자" })} style={{ width: "100%", marginTop: 8 }}>체험 모드로 계속</Button>
+        <Button onClick={() => onLogin(LOCAL_USER)} style={{ width: "100%", marginTop: 8 }}>체험 모드로 계속</Button>
         {message && <p style={{ margin: "12px 0 0", color: C.warn, fontSize: 12, lineHeight: 1.5 }}>{message}</p>}
       </Panel>
     </main>
@@ -1423,6 +1922,7 @@ export default function App() {
   const [incomingSql, setIncomingSql] = useState(null);
   const [user, setUser] = useState(() => authStore.getUser() || readJSON(STORAGE.user, null));
   const [authMessage, setAuthMessage] = useState("");
+  const [sharedDetailId, setSharedDetailId] = useState(null);
 
   useEffect(() => {
     Object.assign(document.body.style, {
@@ -1435,6 +1935,15 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (authStore.get()) {
+      api.me()
+        .then(nextUser => {
+          setUser(nextUser);
+          writeJSON(STORAGE.user, nextUser);
+          if (nextUser.needs_display_name) setPage("display-name");
+        })
+        .catch(() => {});
+    }
     const params = new URLSearchParams(window.location.search);
     const token = params.get("token");
     const error = params.get("error");
@@ -1442,7 +1951,15 @@ export default function App() {
       authStore.save(token);
       const nextUser = authStore.getUser();
       setUser(nextUser);
-      setPage("editor");
+      writeJSON(STORAGE.user, nextUser);
+      setPage(nextUser?.needs_display_name ? "display-name" : "editor");
+      api.me()
+        .then(fullUser => {
+          setUser(fullUser);
+          writeJSON(STORAGE.user, fullUser);
+          if (fullUser.needs_display_name) setPage("display-name");
+        })
+        .catch(() => {});
       window.history.replaceState({}, "", window.location.pathname);
       return;
     }
@@ -1462,10 +1979,20 @@ export default function App() {
     setPage("editor");
   };
 
+  const openShared = id => {
+    setSharedDetailId(id);
+    setPage("shared-detail");
+  };
+
   const handleLogin = nextUser => {
     setUser(nextUser);
     writeJSON(STORAGE.user, nextUser);
-    setPage("editor");
+    setPage(nextUser?.needs_display_name ? "display-name" : "editor");
+  };
+
+  const handleUserUpdate = nextUser => {
+    setUser(nextUser);
+    writeJSON(STORAGE.user, nextUser);
   };
 
   const handleLogout = () => {
@@ -1479,10 +2006,14 @@ export default function App() {
     <div style={{ minHeight: "100vh", background: C.bg }}>
       <NavBar page={page} setPage={setPage} user={user} onLogout={handleLogout} />
       {page === "home" && <HomeDashboard setPage={setPage} loadExample={loadExample} />}
-      {page === "editor" && <Workspace initialRequest={incomingSql} />}
+      {page === "editor" && <Workspace initialRequest={incomingSql} user={user} setPage={setPage} onOpenShared={openShared} />}
       {page === "visualizer" && <VisualizerPage loadExample={loadExample} />}
       {page === "concepts" && <ConceptsPage loadExample={loadExample} />}
-      {page === "docs" && <DocsPage setPage={setPage} loadExample={loadExample} />}
+      {page === "docs" && <DocsPage user={user} setPage={setPage} loadExample={loadExample} onOpenShared={openShared} />}
+      {page === "shared" && <SharedBoard onOpenShared={openShared} />}
+      {page === "shared-detail" && <SharedDetail id={sharedDetailId} user={user} setPage={setPage} loadExample={loadExample} />}
+      {page === "mypage" && <MyPage user={user} onUserUpdate={handleUserUpdate} />}
+      {page === "display-name" && <DisplayNameSetup user={user} onComplete={nextUser => { handleUserUpdate(nextUser); setPage("editor"); }} />}
       {page === "login" && <LoginPage onLogin={handleLogin} authMessage={authMessage} />}
     </div>
   );

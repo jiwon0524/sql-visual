@@ -52,7 +52,7 @@ function decodeJwtPayload(jwt) {
 
 async function req(method, path, body = null) {
   if (!BASE) {
-    throw new Error("백엔드 API 주소가 설정되어 있지 않습니다. 공개 API 주소를 입력하거나 로컬 백엔드를 연결하세요.");
+    throw new Error("백엔드 API 주소가 설정되어 있지 않습니다.");
   }
 
   const headers = { "Content-Type": "application/json" };
@@ -86,12 +86,24 @@ export const api = {
     if (authType) params.set("authType", authType);
     return req("GET", `/auth/naver${params.toString() ? `?${params}` : ""}`);
   },
-  me: () => req("GET", "/auth/me"),
-  getDocs: () => req("GET", "/docs"),
-  getDoc: id => req("GET", `/docs/${id}`),
-  createDoc: data => req("POST", "/docs", data),
-  saveDoc: (id, data) => req("PUT", `/docs/${id}`, data),
-  deleteDoc: id => req("DELETE", `/docs/${id}`),
+  me: () => req("GET", "/me"),
+  updateDisplayName: display_name => req("PATCH", "/me/display-name", { display_name }),
+  getDocs: () => req("GET", "/documents"),
+  getDoc: id => req("GET", `/documents/${id}`),
+  createDoc: data => req("POST", "/documents", data),
+  saveDoc: (id, data) => req("PATCH", `/documents/${id}`, data),
+  deleteDoc: id => req("DELETE", `/documents/${id}`),
+  createShared: data => req("POST", "/shared", data),
+  getShared: params => req("GET", `/shared${params ? `?${new URLSearchParams(params)}` : ""}`),
+  getSharedDoc: id => req("GET", `/shared/${id}`),
+  updateShared: (id, data) => req("PATCH", `/shared/${id}`, data),
+  deleteShared: id => req("DELETE", `/shared/${id}`),
+  copyShared: id => req("POST", `/shared/${id}/copy`),
+  likeShared: id => req("POST", `/shared/${id}/like`),
+  getComments: id => req("GET", `/shared/${id}/comments`),
+  createComment: (id, content) => req("POST", `/shared/${id}/comments`, { content }),
+  updateComment: (id, content) => req("PATCH", `/comments/${id}`, { content }),
+  deleteComment: id => req("DELETE", `/comments/${id}`),
 };
 
 export const authStore = {
@@ -107,7 +119,14 @@ export const authStore = {
         localStorage.removeItem("sv_token");
         return null;
       }
-      return { id: p.id, username: p.username, email: p.email, profile_image: p.profile_image };
+      return {
+        id: p.id,
+        username: p.username || p.display_name,
+        display_name: p.display_name || p.username || "",
+        email: p.email,
+        profile_image: p.profile_image,
+        needs_display_name: Boolean(p.needs_display_name),
+      };
     } catch {
       return null;
     }
