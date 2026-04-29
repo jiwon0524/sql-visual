@@ -32,9 +32,34 @@ NAVER_CALLBACK_URL=https://sql-visual.onrender.com/api/auth/naver/callback
 FRONTEND_URL=https://jiwon0524.github.io/sql-visual
 CORS_ORIGINS=https://jiwon0524.github.io
 JWT_SECRET=replace_with_a_long_random_secret
+DATA_FILE=/var/data/sqlvisual-data.json
 ```
 
 Most hosts provide `PORT` automatically. Only set `PORT` manually if your host tells you to.
+
+## Persistent Data
+
+Saved documents, shared board posts, comments, and display names are stored in a JSON data file. On Render, a normal web service filesystem can be reset when the service redeploys or restarts. To keep data after updates, attach a persistent disk and store the data file there.
+
+If you deploy with the included `render.yaml`, it creates:
+
+- Disk name: `sqlvisual-data`
+- Mount path: `/var/data`
+- Data file: `/var/data/sqlvisual-data.json`
+
+If you created the Render service manually, add the disk in Render Dashboard and set:
+
+```env
+DATA_FILE=/var/data/sqlvisual-data.json
+```
+
+You can confirm the backend is using persistent storage at:
+
+```text
+https://sql-visual.onrender.com/api/health
+```
+
+The response should include `"persistentStore": true`.
 
 ## Naver Developers Settings
 

@@ -3,7 +3,7 @@ import express from "express";
 import cors from "cors";
 import jwt from "jsonwebtoken";
 import axios from "axios";
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
@@ -13,7 +13,9 @@ const PORT = Number(process.env.PORT || 3001);
 const PUBLIC_FRONTEND_URL = "https://jiwon0524.github.io/sql-visual/";
 const PUBLIC_BACKEND_URL = "https://sql-visual.onrender.com";
 const RENDER_CALLBACK_URL = process.env.RENDER_EXTERNAL_URL ? `${process.env.RENDER_EXTERNAL_URL}/api/auth/naver/callback` : `${PUBLIC_BACKEND_URL}/api/auth/naver/callback`;
-const DATA_FILE = process.env.DATA_FILE || join(__dirname, "sqlvisual-data.json");
+const RENDER_DISK_DIR = "/var/data";
+const DEFAULT_DATA_FILE = existsSync(RENDER_DISK_DIR) ? join(RENDER_DISK_DIR, "sqlvisual-data.json") : join(__dirname, "sqlvisual-data.json");
+const DATA_FILE = process.env.DATA_FILE || DEFAULT_DATA_FILE;
 
 const CONFIG = {
   JWT_SECRET: process.env.JWT_SECRET || "sqlvisual_jwt_secret_2024",
@@ -138,7 +140,11 @@ function loadStore() {
 }
 
 function saveStore(store) {
-  writeFileSync(DATA_FILE, JSON.stringify(migrateStore(store), null, 2));
+  mkdirSync(dirname(DATA_FILE), { recursive: true });
+  const payload = JSON.stringify(migrateStore(store), null, 2);
+  const tempFile = `${DATA_FILE}.${process.pid}.tmp`;
+  writeFileSync(tempFile, payload);
+  renameSync(tempFile, DATA_FILE);
 }
 
 function publicUser(user) {
@@ -224,7 +230,14 @@ app.use(cors({
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true, service: "SQLVisual API", naverConfigured: isNaverConfigured(), store: "json" });
+  res.json({
+    ok: true,
+    service: "SQLVisual API",
+    naverConfigured: isNaverConfigured(),
+    store: "json",
+    dataFile: DATA_FILE,
+    persistentStore: DATA_FILE.startsWith(`${RENDER_DISK_DIR}/`),
+  });
 });
 
 app.get("/api/auth/naver", (req, res) => {

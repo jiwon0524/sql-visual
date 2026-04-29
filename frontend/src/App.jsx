@@ -1767,23 +1767,41 @@ function ExampleModal({ open, onClose, onPick }) {
 function DocsModal({ open, onClose, onLoad }) {
   const [docs, setDocs] = useState([]);
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+  const requestId = useRef(0);
   useEffect(() => {
     if (!open) return;
+    const currentRequest = requestId.current + 1;
+    requestId.current = currentRequest;
+    const isCurrent = () => requestId.current === currentRequest;
     if (!authStore.get()) {
       setDocs([]);
       setMessage("사이트 문서 불러오기는 로그인이 필요합니다.");
+      setLoading(false);
       return;
     }
-    setMessage("문서를 불러오는 중입니다.");
+    setLoading(true);
+    setMessage("");
     api.getDocs()
-      .then(items => { setDocs(items); setMessage(""); })
-      .catch(err => { setDocs([]); setMessage(err.message); });
+      .then(items => {
+        if (!isCurrent()) return;
+        setDocs(items);
+        setMessage("");
+      })
+      .catch(err => {
+        if (!isCurrent()) return;
+        setMessage(err.message);
+      })
+      .finally(() => {
+        if (isCurrent()) setLoading(false);
+      });
   }, [open]);
   if (!open) return null;
   return (
     <Modal title="문서 불러오기" onClose={onClose}>
+      {loading && <p style={{ margin: "0 0 12px", color: C.muted, fontSize: 12 }}>문서 목록을 업데이트하는 중입니다.</p>}
       {message && <p style={{ margin: "0 0 12px", color: C.muted, fontSize: 12 }}>{message}</p>}
-      <ListEmpty show={!message && !docs.length} text="저장된 문서가 없습니다." />
+      <ListEmpty show={!loading && !message && !docs.length} text="저장된 문서가 없습니다." />
       {docs.map(doc => <CompactAction key={doc.id} label={doc.title} sub={`${doc.author || "나"} · ${formatDate(doc.updated_at)}`} onClick={() => onLoad(doc)} />)}
     </Modal>
   );
@@ -1883,17 +1901,34 @@ function Modal({ title, onClose, children, wide }) {
 function DocsPage({ user, setPage, loadExample, onOpenShared }) {
   const [docs, setDocs] = useState([]);
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+  const requestId = useRef(0);
 
   const refresh = useCallback(() => {
+    const currentRequest = requestId.current + 1;
+    requestId.current = currentRequest;
+    const isCurrent = () => requestId.current === currentRequest;
     if (!user || user.local) {
       setDocs([]);
       setMessage("사이트 저장 문서는 네이버 로그인 후 사용할 수 있습니다.");
+      setLoading(false);
       return;
     }
-    setMessage("문서를 불러오는 중입니다.");
+    setLoading(true);
+    setMessage("");
     api.getDocs()
-      .then(items => { setDocs(items); setMessage(""); })
-      .catch(err => { setDocs([]); setMessage(err.message); });
+      .then(items => {
+        if (!isCurrent()) return;
+        setDocs(items);
+        setMessage("");
+      })
+      .catch(err => {
+        if (!isCurrent()) return;
+        setMessage(err.message);
+      })
+      .finally(() => {
+        if (isCurrent()) setLoading(false);
+      });
   }, [user]);
 
   useEffect(() => { refresh(); }, [refresh]);
@@ -1941,8 +1976,9 @@ function DocsPage({ user, setPage, loadExample, onOpenShared }) {
   return (
     <main style={{ maxWidth: 1080, margin: "0 auto", padding: 24, display: "grid", gap: 14 }}>
       <Panel title="내 문서" action={<Button onClick={refresh}>새로고침</Button>}>
+        {loading && <p style={{ margin: "0 0 12px", color: C.muted, fontSize: 12 }}>문서 목록을 업데이트하는 중입니다. 기존 목록은 그대로 유지됩니다.</p>}
         {message && <p style={{ margin: "0 0 12px", color: C.muted, fontSize: 12 }}>{message}</p>}
-        <ListEmpty show={!message && !docs.length} text="저장된 문서가 없습니다." />
+        <ListEmpty show={!loading && !message && !docs.length} text="저장된 문서가 없습니다." />
         {docs.map(doc => (
           <div key={doc.id} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12, alignItems: "center", border: `1px solid ${C.lineSoft}`, borderRadius: 8, padding: 12, marginBottom: 8, background: C.panelAlt }}>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -1968,19 +2004,45 @@ function DocsPage({ user, setPage, loadExample, onOpenShared }) {
 
 function SharedBoard({ onOpenShared }) {
   const [items, setItems] = useState([]);
+  const [queryInput, setQueryInput] = useState("");
   const [query, setQuery] = useState("");
   const [tag, setTag] = useState("");
   const [sort, setSort] = useState("latest");
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+  const requestId = useRef(0);
 
   const refresh = useCallback(() => {
-    setMessage("공유 문서를 불러오는 중입니다.");
+    const currentRequest = requestId.current + 1;
+    requestId.current = currentRequest;
+    const isCurrent = () => requestId.current === currentRequest;
+    setLoading(true);
+    setMessage("");
     api.getShared({ q: query, tag, sort })
-      .then(data => { setItems(data); setMessage(""); })
-      .catch(err => { setItems([]); setMessage(err.message); });
+      .then(data => {
+        if (!isCurrent()) return;
+        setItems(data);
+        setMessage("");
+      })
+      .catch(err => {
+        if (!isCurrent()) return;
+        setMessage(err.message);
+      })
+      .finally(() => {
+        if (isCurrent()) setLoading(false);
+      });
   }, [query, tag, sort]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  const submitSearch = () => {
+    const nextQuery = queryInput.trim();
+    if (nextQuery === query) {
+      refresh();
+      return;
+    }
+    setQuery(nextQuery);
+  };
 
   const tags = useMemo(() => {
     const all = items.flatMap(item => item.tags || []);
@@ -1995,12 +2057,20 @@ function SharedBoard({ onOpenShared }) {
           <p style={{ margin: "8px 0 0", color: C.sub, fontSize: 13 }}>다른 사용자의 SQL 문서와 테이블 설계를 참고하고 토론합니다.</p>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <input value={query} onChange={event => setQuery(event.target.value)} placeholder="제목, 설명, SQL 검색" style={{ width: 240, height: 34, border: `1px solid ${C.line}`, borderRadius: 8, padding: "0 11px", outline: "none" }} />
+          <input
+            value={queryInput}
+            onChange={event => setQueryInput(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === "Enter") submitSearch();
+            }}
+            placeholder="제목, 설명, SQL 검색"
+            style={{ width: 240, height: 34, border: `1px solid ${C.line}`, borderRadius: 8, padding: "0 11px", outline: "none" }}
+          />
           <select value={sort} onChange={event => setSort(event.target.value)} style={{ height: 34, border: `1px solid ${C.line}`, borderRadius: 8, padding: "0 10px", background: C.panel }}>
             <option value="latest">최신순</option>
             <option value="popular">인기순</option>
           </select>
-          <Button onClick={refresh}>검색</Button>
+          <Button onClick={submitSearch}>검색</Button>
         </div>
       </section>
 
@@ -2010,8 +2080,9 @@ function SharedBoard({ onOpenShared }) {
       </div>
 
       <Panel title="공개 SQL 문서">
+        {loading && <p style={{ margin: "0 0 12px", color: C.muted, fontSize: 12 }}>공유 게시판을 업데이트하는 중입니다. 기존 목록은 그대로 유지됩니다.</p>}
         {message && <p style={{ margin: "0 0 12px", color: C.muted, fontSize: 12 }}>{message}</p>}
-        <ListEmpty show={!message && !items.length} text="공유된 문서가 없습니다." />
+        <ListEmpty show={!loading && !message && !items.length} text="공유된 문서가 없습니다." />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))", gap: 12 }}>
           {items.map(item => (
             <button key={item.id} onClick={() => onOpenShared(item.id)} style={{ border: `1px solid ${C.lineSoft}`, background: C.panelAlt, borderRadius: 9, padding: 14, textAlign: "left", cursor: "pointer", display: "grid", gap: 10 }}>
