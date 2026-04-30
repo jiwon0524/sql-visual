@@ -3127,6 +3127,7 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const token = params.get("token");
     const login = params.get("login");
+    const code = params.get("code");
     const error = params.get("error");
     if (token) {
       authStore.save(token);
@@ -3145,7 +3146,13 @@ export default function App() {
       return;
     }
     if (login === "ok") {
-      api.me()
+      const loginPromise = code
+        ? api.exchangeSession(code).then(result => {
+            authStore.save(result.token);
+            return result.user;
+          })
+        : api.me();
+      loginPromise
         .then(fullUser => {
           setUser(fullUser);
           writeJSON(STORAGE.user, fullUser);

@@ -74,6 +74,7 @@ export const api = {
     return req("GET", `/auth/naver${params.toString() ? `?${params}` : ""}`);
   },
   logout: () => req("POST", "/auth/logout"),
+  exchangeSession: code => req("POST", "/auth/session", { code }),
   me: () => req("GET", "/me"),
   updateDisplayName: display_name => req("PATCH", "/me/display-name", { display_name }),
   getDocs: () => req("GET", "/documents"),

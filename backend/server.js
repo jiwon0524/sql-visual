@@ -30,6 +30,7 @@ const USE_SQLITE_STORE = REQUESTED_STORE_ENGINE === "sqlite" && Boolean(Database
 let sqliteStore = null;
 const AUTH_COOKIE_NAME = "sv_session";
 const IS_PRODUCTION = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER_EXTERNAL_URL);
+const loginCodes = new Map();
 
 const CONFIG = {
   JWT_SECRET: process.env.JWT_SECRET || "sqlvisual_jwt_secret_2024",
@@ -99,6 +100,31 @@ function withQuery(target, key, value) {
   const url = new URL(target);
   url.searchParams.set(key, value);
   return url.toString();
+}
+
+function randomCode() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function createLoginCode(token) {
+  const code = randomCode();
+  const expiresAt = Date.now() + 2 * 60 * 1000;
+  loginCodes.set(code, { token, expiresAt });
+  return code;
+}
+
+function consumeLoginCode(code) {
+  const entry = loginCodes.get(code);
+  loginCodes.delete(code);
+  if (!entry || entry.expiresAt < Date.now()) return null;
+  return entry.token;
+}
+
+function cleanLoginCodes() {
+  const nowMs = Date.now();
+  for (const [code, entry] of loginCodes) {
+    if (entry.expiresAt < nowMs) loginCodes.delete(code);
+  }
 }
 
 function now() {
@@ -784,8 +810,11 @@ app.get("/api/auth/naver/callback", async (req, res) => {
     }
 
     saveStore(store);
-    setSessionCookie(req, res, signUser(user));
-    res.redirect(withQuery(returnTo, "login", "ok"));
+    cleanLoginCodes();
+    const token = signUser(user);
+    const loginCode = createLoginCode(token);
+    setSessionCookie(req, res, token);
+    res.redirect(withQuery(withQuery(returnTo, "login", "ok"), "code", loginCode));
   } catch (err) {
     console.error("Naver OAuth error:", err.response?.data || err.message);
     res.redirect(withQuery(returnTo, "error", "oauth_failed"));
@@ -807,6 +836,20 @@ app.get("/api/auth/me", auth, (req, res) => {
 app.post("/api/auth/logout", (req, res) => {
   clearSessionCookie(req, res);
   res.json({ ok: true });
+});
+
+app.post("/api/auth/session", (req, res) => {
+  const token = consumeLoginCode(String(req.body.code || ""));
+  if (!token) return res.status(401).json({ error: "Login code expired. Please log in again." });
+  try {
+    const payload = jwt.verify(token, CONFIG.JWT_SECRET);
+    const user = findUser(loadStore(), payload.id);
+    if (!user) return res.status(404).json({ error: "User not found." });
+    setSessionCookie(req, res, token);
+    res.json({ user: publicUser(user), token });
+  } catch {
+    res.status(401).json({ error: "Login code expired. Please log in again." });
+  }
 });
 
 app.patch("/api/me/display-name", auth, (req, res) => {
