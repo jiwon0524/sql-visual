@@ -500,6 +500,29 @@ function fileNameFromTitle(title) {
   return `${safe || "sqlvisual-query"}.sql`;
 }
 
+function renderInlineMarkup(value) {
+  const raw = String(value || "");
+  const nodes = [];
+  const pattern = /<(b|code)>(.*?)<\/\1>|<br\s*\/?>/gis;
+  let lastIndex = 0;
+  let key = 0;
+
+  for (const match of raw.matchAll(pattern)) {
+    if (match.index > lastIndex) nodes.push(raw.slice(lastIndex, match.index));
+    if (match[0].toLowerCase().startsWith("<br")) {
+      nodes.push(<br key={`br-${key++}`} />);
+    } else if (match[1].toLowerCase() === "b") {
+      nodes.push(<b key={`b-${key++}`}>{match[2]}</b>);
+    } else {
+      nodes.push(<code key={`code-${key++}`}>{match[2]}</code>);
+    }
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < raw.length) nodes.push(raw.slice(lastIndex));
+  return nodes;
+}
+
 function createBrowserDatabase(SQL) {
   const db = new SQL.Database();
   db.exec("PRAGMA foreign_keys = ON");
@@ -878,6 +901,7 @@ function NavBar({ page, setPage, user, onLogout }) {
     ["shared", "공유 게시판"],
   ];
   if (user && !user.local) items.push(["mypage", "마이페이지"]);
+  if (user?.is_admin) items.push(["admin", "운영"]);
 
   return (
     <header style={{ height: 50, borderBottom: `1px solid ${C.line}`, background: C.panel, display: "flex", alignItems: "center", padding: "0 clamp(10px, 3vw, 18px)", gap: 10, overflow: "hidden" }}>
@@ -1706,7 +1730,7 @@ function ErrorView({ outputs }) {
               {out.errorLineText && <code style={{ display: "block", whiteSpace: "pre-wrap", background: C.panel, border: "1px solid #fecaca", borderRadius: 7, padding: "8px 10px", color: C.text, fontFamily: C.mono, fontSize: 11 }}>{out.errorLineText}</code>}
             </div>
           )}
-          <div style={{ color: C.text, fontSize: 12, lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: out.err.msg }} />
+          <div style={{ color: C.text, fontSize: 12, lineHeight: 1.6 }}>{renderInlineMarkup(out.err.msg)}</div>
           <p style={{ margin: "8px 0 0", color: C.sub, fontSize: 12 }}>{out.err.hint}</p>
         </section>
       ))}
@@ -2015,12 +2039,16 @@ function DocsPage({ user, setPage, loadExample, onOpenShared }) {
   );
 }
 
+const SHARED_PAGE_SIZE = 30;
+
 function SharedBoard({ onOpenShared }) {
   const [items, setItems] = useState([]);
   const [queryInput, setQueryInput] = useState("");
   const [query, setQuery] = useState("");
   const [tag, setTag] = useState("");
   const [sort, setSort] = useState("latest");
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const requestId = useRef(0);
@@ -2031,10 +2059,11 @@ function SharedBoard({ onOpenShared }) {
     const isCurrent = () => requestId.current === currentRequest;
     setLoading(true);
     setMessage("");
-    api.getShared({ q: query, tag, sort })
+    api.getShared({ q: query, tag, sort, limit: SHARED_PAGE_SIZE, offset })
       .then(data => {
         if (!isCurrent()) return;
-        setItems(data);
+        setItems(offset ? previous => [...previous, ...data] : data);
+        setHasMore(data.length === SHARED_PAGE_SIZE);
         setMessage("");
       })
       .catch(err => {
@@ -2044,12 +2073,13 @@ function SharedBoard({ onOpenShared }) {
       .finally(() => {
         if (isCurrent()) setLoading(false);
       });
-  }, [query, tag, sort]);
+  }, [query, tag, sort, offset]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
   const submitSearch = () => {
     const nextQuery = queryInput.trim();
+    setOffset(0);
     if (nextQuery === query) {
       refresh();
       return;
@@ -2079,7 +2109,7 @@ function SharedBoard({ onOpenShared }) {
             placeholder="제목, 설명, SQL 검색"
             style={{ width: 240, height: 34, border: `1px solid ${C.line}`, borderRadius: 8, padding: "0 11px", outline: "none" }}
           />
-          <select value={sort} onChange={event => setSort(event.target.value)} style={{ height: 34, border: `1px solid ${C.line}`, borderRadius: 8, padding: "0 10px", background: C.panel }}>
+          <select value={sort} onChange={event => { setSort(event.target.value); setOffset(0); }} style={{ height: 34, border: `1px solid ${C.line}`, borderRadius: 8, padding: "0 10px", background: C.panel }}>
             <option value="latest">최신순</option>
             <option value="popular">인기순</option>
           </select>
@@ -2088,8 +2118,8 @@ function SharedBoard({ onOpenShared }) {
       </section>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button onClick={() => setTag("")} style={{ border: `1px solid ${C.line}`, background: !tag ? C.dark : C.panel, color: !tag ? "#fff" : C.sub, borderRadius: 999, padding: "6px 10px", cursor: "pointer", fontSize: 12 }}>전체</button>
-        {tags.map(item => <button key={item} onClick={() => setTag(item)} style={{ border: `1px solid ${C.line}`, background: tag === item ? C.dark : C.panel, color: tag === item ? "#fff" : C.sub, borderRadius: 999, padding: "6px 10px", cursor: "pointer", fontSize: 12 }}>{item}</button>)}
+        <button onClick={() => { setTag(""); setOffset(0); }} style={{ border: `1px solid ${C.line}`, background: !tag ? C.dark : C.panel, color: !tag ? "#fff" : C.sub, borderRadius: 999, padding: "6px 10px", cursor: "pointer", fontSize: 12 }}>전체</button>
+        {tags.map(item => <button key={item} onClick={() => { setTag(item); setOffset(0); }} style={{ border: `1px solid ${C.line}`, background: tag === item ? C.dark : C.panel, color: tag === item ? "#fff" : C.sub, borderRadius: 999, padding: "6px 10px", cursor: "pointer", fontSize: 12 }}>{item}</button>)}
       </div>
 
       <Panel title="공개 SQL 문서">
@@ -2112,6 +2142,7 @@ function SharedBoard({ onOpenShared }) {
             </button>
           ))}
         </div>
+        {hasMore && <Button onClick={() => setOffset(items.length)} disabled={loading} style={{ marginTop: 12, justifySelf: "center" }}>더 보기</Button>}
       </Panel>
     </main>
   );
@@ -2171,6 +2202,43 @@ function SharedDetail({ id, user, setPage, loadExample }) {
     }
   };
 
+  const reportTarget = async (targetType, targetId) => {
+    if (!user || user.local) {
+      setMessage("신고는 네이버 로그인이 필요합니다.");
+      return;
+    }
+    const details = window.prompt("신고 사유를 적어주세요.", "");
+    if (details === null) return;
+    try {
+      await api.report({ target_type: targetType, target_id: targetId, reason: "user_report", details });
+      setMessage("신고가 접수되었습니다.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const moderateShared = async isHidden => {
+    const moderationReason = isHidden ? window.prompt("숨김 사유", doc?.moderation_reason || "") : "";
+    if (isHidden && moderationReason === null) return;
+    try {
+      await api.updateAdminShared(doc.id, { is_hidden: isHidden, moderation_reason: moderationReason || "" });
+      refresh();
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const moderateComment = async (commentId, isHidden) => {
+    const moderationReason = isHidden ? window.prompt("숨김 사유", "") : "";
+    if (isHidden && moderationReason === null) return;
+    try {
+      await api.updateAdminComment(commentId, { is_hidden: isHidden, moderation_reason: moderationReason || "" });
+      refresh();
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
   const schemas = doc?.schema?.length ? doc.schema : schemasFromSql(doc?.sql_code || "");
 
   return (
@@ -2179,7 +2247,13 @@ function SharedDetail({ id, user, setPage, loadExample }) {
       {message && <p style={{ margin: 0, color: C.warn, fontSize: 12 }}>{message}</p>}
       {doc && (
         <>
-          <Panel title={doc.title} action={<Button variant="primary" onClick={copyToWorkspace}>내 작업공간으로 복사</Button>}>
+          <Panel title={doc.title} action={
+            <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+              <Button variant="primary" onClick={copyToWorkspace}>내 작업공간으로 복사</Button>
+              {user && !user.local && <Button onClick={() => reportTarget("shared", doc.id)}>신고</Button>}
+              {user?.is_admin && <Button variant={doc.is_hidden ? "default" : "danger"} onClick={() => moderateShared(!doc.is_hidden)}>{doc.is_hidden ? "숨김 해제" : "운영 숨김"}</Button>}
+            </div>
+          }>
             <p style={{ margin: "0 0 12px", color: C.sub, fontSize: 13, lineHeight: 1.6 }}>{doc.description || "설명이 없습니다."}</p>
             <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 12 }}>
               {(doc.tags || []).map(t => <Badge key={t} text={t} tone="accent" />)}
@@ -2199,7 +2273,11 @@ function SharedDetail({ id, user, setPage, loadExample }) {
                     <span style={{ color: C.muted, fontSize: 11 }}>{formatDate(item.updated_at)}</span>
                   </div>
                   <p style={{ margin: 0, color: C.sub, fontSize: 12, lineHeight: 1.6 }}>{item.content}</p>
-                  {user?.id === item.user_id && <Button variant="ghost" onClick={() => removeComment(item.id)} style={{ marginTop: 6 }}>삭제</Button>}
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                    {user?.id === item.user_id && <Button variant="ghost" onClick={() => removeComment(item.id)}>삭제</Button>}
+                    {user && !user.local && <Button variant="ghost" onClick={() => reportTarget("comment", item.id)}>신고</Button>}
+                    {user?.is_admin && <Button variant={item.is_hidden ? "default" : "danger"} onClick={() => moderateComment(item.id, !item.is_hidden)}>{item.is_hidden ? "숨김 해제" : "운영 숨김"}</Button>}
+                  </div>
                 </div>
               ))}
               <textarea value={comment} onChange={event => setComment(event.target.value)} rows={3} placeholder={user && !user.local ? "의견을 남겨보세요." : "댓글 작성은 로그인이 필요합니다."} style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, resize: "vertical" }} />
@@ -2207,6 +2285,229 @@ function SharedDetail({ id, user, setPage, loadExample }) {
             </div>
           </Panel>
         </>
+      )}
+    </main>
+  );
+}
+
+function AdminPage({ user, setPage }) {
+  const [tab, setTab] = useState("reports");
+  const [summary, setSummary] = useState(null);
+  const [reports, setReports] = useState([]);
+  const [shared, setShared] = useState([]);
+  const [comments, setComments] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+  const requestId = useRef(0);
+
+  const refresh = useCallback(() => {
+    if (!user?.is_admin) return;
+    const currentRequest = requestId.current + 1;
+    requestId.current = currentRequest;
+    const isCurrent = () => requestId.current === currentRequest;
+    setLoading(true);
+    setMessage("");
+    Promise.all([
+      api.adminSummary(),
+      api.adminReports({ status: "open" }),
+      api.adminShared({ limit: 100 }),
+      api.adminComments({ limit: 100 }),
+      api.adminUsers({ limit: 100 }),
+    ])
+      .then(([nextSummary, nextReports, nextShared, nextComments, nextUsers]) => {
+        if (!isCurrent()) return;
+        setSummary(nextSummary);
+        setReports(nextReports);
+        setShared(nextShared);
+        setComments(nextComments);
+        setUsers(nextUsers);
+      })
+      .catch(err => {
+        if (isCurrent()) setMessage(err.message);
+      })
+      .finally(() => {
+        if (isCurrent()) setLoading(false);
+      });
+  }, [user]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const updateReport = async (id, status) => {
+    try {
+      await api.updateAdminReport(id, { status });
+      refresh();
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const toggleShared = async item => {
+    const nextHidden = !item.is_hidden;
+    const reason = nextHidden ? window.prompt("공유글 숨김 사유", item.moderation_reason || "") : "";
+    if (nextHidden && reason === null) return;
+    try {
+      await api.updateAdminShared(item.id, { is_hidden: nextHidden, moderation_reason: reason || "" });
+      refresh();
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const toggleComment = async item => {
+    const nextHidden = !item.is_hidden;
+    const reason = nextHidden ? window.prompt("댓글 숨김 사유", item.moderation_reason || "") : "";
+    if (nextHidden && reason === null) return;
+    try {
+      await api.updateAdminComment(item.id, { is_hidden: nextHidden, moderation_reason: reason || "" });
+      refresh();
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const toggleUser = async item => {
+    const nextBlocked = !item.is_blocked;
+    const reason = nextBlocked ? window.prompt("차단 사유", item.blocked_reason || "") : "";
+    if (nextBlocked && reason === null) return;
+    try {
+      await api.updateAdminUser(item.id, { is_blocked: nextBlocked, blocked_reason: reason || "" });
+      refresh();
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const exportBackup = () => {
+    window.open(api.adminExportUrl(), "_blank", "noopener");
+  };
+
+  if (!user?.is_admin) {
+    return (
+      <main style={{ maxWidth: 620, margin: "0 auto", padding: 24 }}>
+        <Panel title="운영">
+          <ListEmpty show text="운영자 권한이 있는 네이버 계정으로 로그인해야 합니다." />
+          <Button onClick={() => setPage("home")} style={{ marginTop: 12 }}>홈으로</Button>
+        </Panel>
+      </main>
+    );
+  }
+
+  const tabs = [
+    ["reports", `신고 ${reports.length}`],
+    ["shared", `공유글 ${shared.length}`],
+    ["comments", `댓글 ${comments.length}`],
+    ["users", `사용자 ${users.length}`],
+  ];
+
+  return (
+    <main style={{ maxWidth: 1180, margin: "0 auto", padding: "24px 20px 46px", display: "grid", gap: 16 }}>
+      <section style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 22 }}>운영 콘솔</h1>
+          <p style={{ margin: "8px 0 0", color: C.sub, fontSize: 13 }}>신고 처리, 공개글 숨김, 댓글 숨김, 사용자 차단을 관리합니다.</p>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Button onClick={refresh} disabled={loading}>새로고침</Button>
+          <Button variant="primary" onClick={exportBackup}>데이터 백업</Button>
+        </div>
+      </section>
+
+      {summary && (
+        <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10 }}>
+          <Metric label="신고 대기" value={summary.open_reports} tone={summary.open_reports ? "warn" : "success"} />
+          <Metric label="공유글" value={summary.shared_documents} />
+          <Metric label="숨김 글" value={summary.hidden_shared_documents} />
+          <Metric label="댓글" value={summary.comments} />
+          <Metric label="차단 사용자" value={summary.blocked_users} tone={summary.blocked_users ? "warn" : "success"} />
+          <Metric label="저장소" value={`${summary.store}${summary.persistentStore ? " / disk" : ""}`} />
+        </section>
+      )}
+
+      <div style={{ display: "flex", gap: 6, padding: 4, border: `1px solid ${C.line}`, borderRadius: 9, background: C.panel, width: "fit-content", maxWidth: "100%", overflowX: "auto" }}>
+        {tabs.map(([id, label]) => (
+          <button key={id} onClick={() => setTab(id)} style={{ border: 0, borderRadius: 7, background: tab === id ? C.dark : "transparent", color: tab === id ? "#fff" : C.sub, padding: "8px 11px", cursor: "pointer", whiteSpace: "nowrap", fontSize: 12, fontWeight: 700 }}>{label}</button>
+        ))}
+      </div>
+
+      {message && <p style={{ margin: 0, color: C.warn, fontSize: 12 }}>{message}</p>}
+
+      {tab === "reports" && (
+        <Panel title="신고 대기">
+          <ListEmpty show={!reports.length} text="처리할 신고가 없습니다." />
+          <div style={{ display: "grid", gap: 10 }}>
+            {reports.map(item => (
+              <div key={item.id} style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 8, background: C.panelAlt, padding: 12, display: "grid", gap: 7 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                  <b style={{ fontSize: 13 }}>{item.target_type === "shared" ? "공유글" : "댓글"} 신고</b>
+                  <span style={{ color: C.muted, fontSize: 11 }}>{formatDate(item.created_at)}</span>
+                </div>
+                <div style={{ color: C.sub, fontSize: 12, lineHeight: 1.55 }}>{item.details || item.reason}</div>
+                <div style={{ color: C.muted, fontSize: 11 }}>신고자 {item.reporter?.display_name || item.reporter?.email || item.reporter_id} · 대상 {item.target?.title || item.target?.shared_title || item.target?.content || "삭제된 대상"}</div>
+                <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                  <Button onClick={() => updateReport(item.id, "reviewed")}>처리 완료</Button>
+                  <Button variant="ghost" onClick={() => updateReport(item.id, "dismissed")}>기각</Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      {tab === "shared" && (
+        <Panel title="공유글 관리">
+          <ListEmpty show={!shared.length} text="공유글이 없습니다." />
+          <div style={{ display: "grid", gap: 10 }}>
+            {shared.map(item => (
+              <div key={item.id} style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 8, background: C.panelAlt, padding: 12, display: "grid", gap: 7 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                  <b style={{ fontSize: 13 }}>{item.title}</b>
+                  <Badge tone={item.is_hidden ? "warn" : "success"} text={item.is_hidden ? "숨김" : "공개"} />
+                </div>
+                <p style={{ margin: 0, color: C.sub, fontSize: 12, lineHeight: 1.55 }}>{item.description || "설명이 없습니다."}</p>
+                <div style={{ color: C.muted, fontSize: 11 }}>작성자 {item.owner?.display_name || item.owner?.email || item.owner_id} · 신고 {item.report_count}</div>
+                <Button variant={item.is_hidden ? "default" : "danger"} onClick={() => toggleShared(item)} style={{ justifySelf: "start" }}>{item.is_hidden ? "숨김 해제" : "숨김"}</Button>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      {tab === "comments" && (
+        <Panel title="댓글 관리">
+          <ListEmpty show={!comments.length} text="댓글이 없습니다." />
+          <div style={{ display: "grid", gap: 10 }}>
+            {comments.map(item => (
+              <div key={item.id} style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 8, background: C.panelAlt, padding: 12, display: "grid", gap: 7 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                  <b style={{ fontSize: 13 }}>{item.author?.display_name || item.author?.email || item.user_id}</b>
+                  <Badge tone={item.is_hidden ? "warn" : "success"} text={item.is_hidden ? "숨김" : "공개"} />
+                </div>
+                <p style={{ margin: 0, color: C.sub, fontSize: 12, lineHeight: 1.55 }}>{item.content}</p>
+                <div style={{ color: C.muted, fontSize: 11 }}>문서 {item.shared?.title || item.shared_document_id} · 신고 {item.report_count}</div>
+                <Button variant={item.is_hidden ? "default" : "danger"} onClick={() => toggleComment(item)} style={{ justifySelf: "start" }}>{item.is_hidden ? "숨김 해제" : "숨김"}</Button>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      {tab === "users" && (
+        <Panel title="사용자 관리">
+          <ListEmpty show={!users.length} text="사용자가 없습니다." />
+          <div style={{ display: "grid", gap: 10 }}>
+            {users.map(item => (
+              <div key={item.id} style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 8, background: C.panelAlt, padding: 12, display: "grid", gap: 7 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                  <b style={{ fontSize: 13 }}>{item.display_name || item.email || `사용자 ${item.id}`}</b>
+                  <Badge tone={item.is_blocked ? "warn" : item.is_admin ? "accent" : "success"} text={item.is_blocked ? "차단" : item.is_admin ? "운영자" : "정상"} />
+                </div>
+                <div style={{ color: C.muted, fontSize: 11 }}>{item.email || "이메일 없음"} · 문서 {item.docs_count} · 공유 {item.shared_count} · 댓글 {item.comments_count}</div>
+                <Button variant={item.is_blocked ? "default" : "danger"} onClick={() => toggleUser(item)} disabled={item.is_admin && item.id !== user.id} style={{ justifySelf: "start" }}>{item.is_blocked ? "차단 해제" : "차단"}</Button>
+              </div>
+            ))}
+          </div>
+        </Panel>
       )}
     </main>
   );
@@ -2814,7 +3115,7 @@ export default function App() {
   }, [page]);
 
   useEffect(() => {
-    if (authStore.get()) {
+    if (authStore.get() || (user && !user.local)) {
       api.me()
         .then(nextUser => {
           setUser(nextUser);
@@ -2825,6 +3126,7 @@ export default function App() {
     }
     const params = new URLSearchParams(window.location.search);
     const token = params.get("token");
+    const login = params.get("login");
     const error = params.get("error");
     if (token) {
       authStore.save(token);
@@ -2839,6 +3141,20 @@ export default function App() {
           if (fullUser.needs_display_name) setPage("display-name");
         })
         .catch(() => {});
+      window.history.replaceState({}, "", window.location.pathname);
+      return;
+    }
+    if (login === "ok") {
+      api.me()
+        .then(fullUser => {
+          setUser(fullUser);
+          writeJSON(STORAGE.user, fullUser);
+          setPage(fullUser.needs_display_name ? "display-name" : "editor");
+        })
+        .catch(() => {
+          setAuthMessage("로그인 세션을 확인하지 못했습니다. 다시 로그인해 주세요.");
+          setPage("login");
+        });
       window.history.replaceState({}, "", window.location.pathname);
       return;
     }
@@ -2875,6 +3191,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    api.logout().catch(() => {});
     authStore.clear();
     localStorage.removeItem(STORAGE.user);
     setUser(null);
@@ -2892,6 +3209,7 @@ export default function App() {
       {page === "shared" && <SharedBoard onOpenShared={openShared} />}
       {page === "shared-detail" && <SharedDetail id={sharedDetailId} user={user} setPage={setPage} loadExample={loadExample} />}
       {page === "mypage" && <MyPage user={user} onUserUpdate={handleUserUpdate} />}
+      {page === "admin" && <AdminPage user={user} setPage={setPage} />}
       {page === "display-name" && <DisplayNameSetup user={user} onComplete={nextUser => { handleUserUpdate(nextUser); setPage("editor"); }} />}
       {page === "login" && <LoginPage onLogin={handleLogin} authMessage={authMessage} />}
     </div>

@@ -52,15 +52,13 @@ async function req(method, path, body = null) {
       headers,
       body: body ? JSON.stringify(body) : null,
       signal: controller.signal,
+      credentials: "include",
     });
     const data = await res.json().catch(() => ({}));
-    if (res.status === 404) {
-      throw new Error("백엔드 API가 최신 버전이 아닙니다. Render 배포 상태를 확인하세요.");
-    }
-    if (!res.ok) throw new Error(data.error || "서버 오류가 발생했습니다.");
+    if (!res.ok) throw new Error(data.error || `서버 오류가 발생했습니다. (${res.status})`);
     return data;
   } catch (err) {
-    if (err.name === "AbortError") throw new Error("백엔드 API 연결 시간이 초과되었습니다. Render 무료 서버가 깨어나는 중이면 잠시 뒤 다시 시도하세요.");
+    if (err.name === "AbortError") throw new Error("백엔드 API 연결 시간이 초과되었습니다. 잠시 후 다시 시도하세요.");
     throw err;
   } finally {
     window.clearTimeout(timeout);
@@ -75,6 +73,7 @@ export const api = {
     if (authType) params.set("authType", authType);
     return req("GET", `/auth/naver${params.toString() ? `?${params}` : ""}`);
   },
+  logout: () => req("POST", "/auth/logout"),
   me: () => req("GET", "/me"),
   updateDisplayName: display_name => req("PATCH", "/me/display-name", { display_name }),
   getDocs: () => req("GET", "/documents"),
@@ -93,6 +92,17 @@ export const api = {
   createComment: (id, content) => req("POST", `/shared/${id}/comments`, { content }),
   updateComment: (id, content) => req("PATCH", `/comments/${id}`, { content }),
   deleteComment: id => req("DELETE", `/comments/${id}`),
+  report: data => req("POST", "/reports", data),
+  adminSummary: () => req("GET", "/admin/summary"),
+  adminReports: params => req("GET", `/admin/reports${params ? `?${new URLSearchParams(params)}` : ""}`),
+  updateAdminReport: (id, data) => req("PATCH", `/admin/reports/${id}`, data),
+  adminShared: params => req("GET", `/admin/shared${params ? `?${new URLSearchParams(params)}` : ""}`),
+  updateAdminShared: (id, data) => req("PATCH", `/admin/shared/${id}`, data),
+  adminComments: params => req("GET", `/admin/comments${params ? `?${new URLSearchParams(params)}` : ""}`),
+  updateAdminComment: (id, data) => req("PATCH", `/admin/comments/${id}`, data),
+  adminUsers: params => req("GET", `/admin/users${params ? `?${new URLSearchParams(params)}` : ""}`),
+  updateAdminUser: (id, data) => req("PATCH", `/admin/users/${id}`, data),
+  adminExportUrl: () => `${BASE}/admin/export`,
 };
 
 export const authStore = {
@@ -115,6 +125,8 @@ export const authStore = {
         email: p.email,
         profile_image: p.profile_image,
         needs_display_name: Boolean(p.needs_display_name),
+        is_admin: Boolean(p.is_admin),
+        is_blocked: Boolean(p.is_blocked),
       };
     } catch {
       return null;

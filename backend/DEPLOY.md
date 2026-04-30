@@ -21,7 +21,7 @@ For Render Web Service:
 - Root directory: `backend`
 - Build command: `npm install`
 - Start command: `npm start`
-- Node version: 20 or newer
+- Node version: 24 or newer
 
 Set these environment variables on the backend host:
 
@@ -33,24 +33,30 @@ FRONTEND_URL=https://jiwon0524.github.io/sql-visual
 CORS_ORIGINS=https://jiwon0524.github.io
 JWT_SECRET=replace_with_a_long_random_secret
 DATA_FILE=/var/data/sqlvisual-data.json
+SQLITE_FILE=/var/data/sqlvisual-data.sqlite
+STORE_ENGINE=sqlite
+ADMIN_NAVER_IDS=your_naver_account_id
+ADMIN_EMAILS=you@example.com
 ```
 
 Most hosts provide `PORT` automatically. Only set `PORT` manually if your host tells you to.
 
 ## Persistent Data
 
-Saved documents, shared board posts, comments, and display names are stored in a JSON data file. On Render, a normal web service filesystem can be reset when the service redeploys or restarts. To keep data after updates, attach a persistent disk and store the data file there.
+Saved documents, shared board posts, comments, likes, and display names are stored in SQLite when Node 24+ is available. The older JSON file remains as a migration source and fallback. On Render, a normal web service filesystem can be reset when the service redeploys or restarts. To keep data after updates, attach a persistent disk and store the SQLite file there.
 
 If you deploy with the included `render.yaml`, it creates:
 
 - Disk name: `sqlvisual-data`
 - Mount path: `/var/data`
-- Data file: `/var/data/sqlvisual-data.json`
+- SQLite file: `/var/data/sqlvisual-data.sqlite`
+- Legacy migration file: `/var/data/sqlvisual-data.json`
 
 If you created the Render service manually, add the disk in Render Dashboard and set:
 
 ```env
-DATA_FILE=/var/data/sqlvisual-data.json
+SQLITE_FILE=/var/data/sqlvisual-data.sqlite
+STORE_ENGINE=sqlite
 ```
 
 You can confirm the backend is using persistent storage at:
@@ -59,7 +65,22 @@ You can confirm the backend is using persistent storage at:
 https://sql-visual.onrender.com/api/health
 ```
 
-The response should include `"persistentStore": true`.
+The response should include `"store": "sqlite"` and `"persistentStore": true`.
+
+## Admin Account
+
+The operation console is only shown when the logged-in Naver account matches an admin allowlist on the backend. Do not hard-code your personal account in the repository.
+
+Set one or both of these backend environment variables:
+
+```env
+ADMIN_NAVER_IDS=naver_profile_id_from_login
+ADMIN_EMAILS=your_naver_login_email@example.com
+```
+
+`ADMIN_NAVER_IDS` is the safest identifier because it comes from Naver's stable profile `id`. After setting it, log in once, open `/api/me` while authenticated, and confirm `"is_admin": true`.
+
+Admins can review reports, hide shared posts, hide comments, block users from writing, and export a full JSON backup from the operation console.
 
 ## Naver Developers Settings
 

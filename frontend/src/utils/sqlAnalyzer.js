@@ -532,11 +532,43 @@ export function analyzeError(sql, errMsg = "") {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // CREATE TABLE 파서 (시각화용)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const IDENT = '(?:"(?:[^"]|"")+"|`[^`]+`|\\[[^\\]]+\\]|[A-Za-z_][\\w$#]*)';
+const IDENT_PATH = `${IDENT}(?:\\s*\\.\\s*${IDENT})?`;
+
+function normalizeIdentifier(value) {
+  const raw = String(value || "").trim();
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("`") && raw.endsWith("`"))) {
+    return raw.slice(1, -1).replace(/""/g, '"');
+  }
+  if (raw.startsWith("[") && raw.endsWith("]")) return raw.slice(1, -1);
+  return raw;
+}
+
+function normalizeIdentifierPath(value) {
+  const parts = String(value || "").match(new RegExp(IDENT, "g"));
+  return (parts || [value]).map(normalizeIdentifier).join(".");
+}
+
+function splitIdentifierList(value) {
+  return splitByComma(value).map(normalizeIdentifierPath).filter(Boolean);
+}
+
+function splitTypeAndConstraints(value) {
+  const raw = String(value || "").trim();
+  const boundary = raw.search(/\s+(PRIMARY|NOT|UNIQUE|REFERENCES|CHECK|DEFAULT|COLLATE|CONSTRAINT)\b/i);
+  if (boundary < 0) return { type: raw, rest: "" };
+  return {
+    type: raw.slice(0, boundary).trim(),
+    rest: raw.slice(boundary).trim(),
+  };
+}
+
 export function parseCreateTable(sql) {
   try {
-    const nm = sql.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\(/i);
+    const tableRe = new RegExp(`CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(${IDENT_PATH})\\s*\\(`, "i");
+    const nm = sql.match(tableRe);
     if (!nm) return null;
-    const tableName = nm[1];
+    const tableName = normalizeIdentifierPath(nm[1]);
     const body = sql.slice(sql.indexOf("(") + 1, sql.lastIndexOf(")"));
     const lines = splitByComma(body);
     const columns = [], foreignKeys = [];
@@ -544,30 +576,44 @@ export function parseCreateTable(sql) {
 
     for (const line of lines) {
       const t = line.trim(); if (!t) continue;
-      const u = t.toUpperCase().trimStart();
-      if (/^(CONSTRAINT\s+\w+\s+)?PRIMARY\s+KEY\b/i.test(t)) {
+      if (/^(CONSTRAINT\s+\S+\s+)?PRIMARY\s+KEY\b/i.test(t)) {
         const m = t.match(/PRIMARY\s+KEY\s*\(([^)]+)\)/i);
-        if (m) tablePKs = m[1].split(",").map(s => s.trim().toLowerCase());
+        if (m) tablePKs = splitIdentifierList(m[1]).map(s => s.toLowerCase());
         continue;
       }
-      if (/^(CONSTRAINT\s+\w+\s+)?FOREIGN\s+KEY\b/i.test(t)) {
-        const m = t.match(/FOREIGN\s+KEY\s*\(\s*(\w+)\s*\)\s+REFERENCES\s+(\w+)\s*\(\s*(\w+)\s*\)/i);
-        if (m) foreignKeys.push({ column: m[1], refTable: m[2], refColumn: m[3] });
+      if (/^(CONSTRAINT\s+\S+\s+)?FOREIGN\s+KEY\b/i.test(t)) {
+        const fkRe = new RegExp(`FOREIGN\\s+KEY\\s*\\(([^)]+)\\)\\s+REFERENCES\\s+(${IDENT_PATH})\\s*\\(([^)]+)\\)`, "i");
+        const m = t.match(fkRe);
+        if (m) {
+          const fkColumns = splitIdentifierList(m[1]);
+          const refColumns = splitIdentifierList(m[3]);
+          fkColumns.forEach((column, idx) => {
+            foreignKeys.push({
+              column,
+              refTable: normalizeIdentifierPath(m[2]),
+              refColumn: refColumns[idx] || refColumns[0],
+            });
+          });
+        }
         continue;
       }
       if (/^(UNIQUE|CHECK|INDEX|KEY)\b/i.test(t)) continue;
-      const cm = t.match(/^(\w+)\s+(\w+(?:\s*\([^)]*\))?)([\s\S]*)$/i);
+
+      const columnRe = new RegExp(`^\\s*(${IDENT})\\s+([\\s\\S]+)$`, "i");
+      const cm = t.match(columnRe);
       if (!cm) continue;
-      const [, name, type, rest] = cm;
+      const name = normalizeIdentifier(cm[1]);
+      const { type, rest } = splitTypeAndConstraints(cm[2]);
       const ru = rest.toUpperCase();
+      const inlineFk = rest.match(new RegExp(`REFERENCES\\s+(${IDENT_PATH})\\s*\\(\\s*(${IDENT})\\s*\\)`, "i"));
       columns.push({
         name, type: type.toUpperCase().replace(/\s+/g, ""),
         pk: ru.includes("PRIMARY KEY"),
         notNull: ru.includes("NOT NULL") || ru.includes("PRIMARY KEY"),
         unique: ru.includes("UNIQUE"),
-        fk: false, refTable: null, refColumn: null,
+        fk: Boolean(inlineFk), refTable: inlineFk ? normalizeIdentifierPath(inlineFk[1]) : null, refColumn: inlineFk ? normalizeIdentifier(inlineFk[2]) : null,
         default: rest.match(/DEFAULT\s+(\S+)/i)?.[1] || null,
-        check:   rest.match(/CHECK\s*\(([^)]+)\)/i)?.[1] || null,
+        check: rest.match(/CHECK\s*\(([^)]+)\)/i)?.[1] || null,
       });
     }
 
@@ -587,15 +633,51 @@ export function parseCreateTable(sql) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // SQL 구문 분리 (세미콜론 기준, 문자열 내부 무시)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function hasSqlContent(statement) {
+  return statement
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/--.*$/gm, "")
+    .trim().length > 0;
+}
+
 export function splitStatements(sql) {
-  const stmts = []; let cur = "", inStr = false, sc = "";
-  for (const ch of sql) {
-    if (!inStr && (ch === "'" || ch === '"')) { inStr = true; sc = ch; cur += ch; }
-    else if (inStr && ch === sc) { inStr = false; cur += ch; }
-    else if (!inStr && ch === ";") { const t = cur.trim(); if (t && !t.startsWith("--")) stmts.push(t); cur = ""; }
-    else cur += ch;
+  const stmts = [];
+  let cur = "", quote = "", lineComment = false, blockComment = false;
+  const pushCurrent = () => {
+    const t = cur.trim();
+    if (t && hasSqlContent(t)) stmts.push(t);
+    cur = "";
+  };
+
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i];
+    const next = sql[i + 1];
+
+    if (lineComment) {
+      cur += ch;
+      if (ch === "\n") lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      cur += ch;
+      if (ch === "*" && next === "/") { cur += next; i++; blockComment = false; }
+      continue;
+    }
+    if (quote) {
+      cur += ch;
+      if ((quote === "'" || quote === '"') && ch === quote && next === quote) { cur += next; i++; continue; }
+      if (ch === quote) quote = "";
+      continue;
+    }
+
+    if (ch === "-" && next === "-") { cur += ch + next; i++; lineComment = true; continue; }
+    if (ch === "/" && next === "*") { cur += ch + next; i++; blockComment = true; continue; }
+    if (ch === "'" || ch === '"' || ch === "`") { quote = ch; cur += ch; continue; }
+    if (ch === "[") { quote = "]"; cur += ch; continue; }
+    if (ch === ";") { pushCurrent(); continue; }
+    cur += ch;
   }
-  const last = cur.trim();
-  if (last && !last.startsWith("--")) stmts.push(last);
+
+  pushCurrent();
   return stmts;
 }

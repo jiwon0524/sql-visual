@@ -8,13 +8,21 @@ services:
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
-        value: 20
+        value: 24
       - key: FRONTEND_URL
         value: https://jiwon0524.github.io/sql-visual
       - key: CORS_ORIGINS
         value: https://jiwon0524.github.io
       - key: DATA_FILE
         value: /var/data/sqlvisual-data.json
+      - key: SQLITE_FILE
+        value: /var/data/sqlvisual-data.sqlite
+      - key: STORE_ENGINE
+        value: sqlite
+      - key: ADMIN_NAVER_IDS
+        sync: false
+      - key: ADMIN_EMAILS
+        sync: false
       - key: NAVER_CLIENT_ID
         sync: false
       - key: NAVER_CLIENT_SECRET
