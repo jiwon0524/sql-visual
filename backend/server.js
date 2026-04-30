@@ -44,7 +44,9 @@ const CONFIG = {
   ADMIN_EMAILS: process.env.ADMIN_EMAILS || "",
 };
 
-const allowedOrigins = CONFIG.CORS_ORIGINS.split(",").map(origin => origin.trim()).filter(Boolean);
+const allowedOrigins = [...new Set(
+  `${DEFAULT_CORS_ORIGINS},${CONFIG.CORS_ORIGINS}`.split(",").map(origin => origin.trim()).filter(Boolean)
+)];
 const adminNaverIds = new Set(CONFIG.ADMIN_NAVER_IDS.split(",").map(item => item.trim()).filter(Boolean));
 const adminEmails = new Set(CONFIG.ADMIN_EMAILS.split(",").map(item => item.trim().toLowerCase()).filter(Boolean));
 
