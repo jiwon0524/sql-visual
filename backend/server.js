@@ -20,6 +20,7 @@ const PORT = Number(process.env.PORT || 3001);
 const PUBLIC_FRONTEND_URL = "https://jiwon0524.github.io/sql-visual/";
 const PUBLIC_BACKEND_URL = "https://sql-visual.onrender.com";
 const DEPLOY_CALLBACK_URL = `${PUBLIC_BACKEND_URL}/api/auth/naver/callback`;
+const DEFAULT_CORS_ORIGINS = "https://jiwon0524.github.io,http://localhost:5173,http://127.0.0.1:5173";
 const RENDER_DISK_DIR = "/var/data";
 const DEFAULT_DATA_FILE = existsSync(RENDER_DISK_DIR) ? join(RENDER_DISK_DIR, "sqlvisual-data.json") : join(__dirname, "sqlvisual-data.json");
 const DATA_FILE = process.env.DATA_FILE || DEFAULT_DATA_FILE;
@@ -38,7 +39,7 @@ const CONFIG = {
   NAVER_CLIENT_SECRET: process.env.NAVER_CLIENT_SECRET || "YOUR_NAVER_CLIENT_SECRET",
   NAVER_CALLBACK_URL: process.env.NAVER_CALLBACK_URL || DEPLOY_CALLBACK_URL,
   FRONTEND_URL: process.env.FRONTEND_URL || PUBLIC_FRONTEND_URL,
-  CORS_ORIGINS: process.env.CORS_ORIGINS || "https://jiwon0524.github.io",
+  CORS_ORIGINS: process.env.CORS_ORIGINS || DEFAULT_CORS_ORIGINS,
   ADMIN_NAVER_IDS: process.env.ADMIN_NAVER_IDS || "",
   ADMIN_EMAILS: process.env.ADMIN_EMAILS || "",
 };

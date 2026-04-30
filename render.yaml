@@ -14,7 +14,7 @@ services:
       - key: NAVER_CALLBACK_URL
         value: https://sql-visual.onrender.com/api/auth/naver/callback
       - key: CORS_ORIGINS
-        value: https://jiwon0524.github.io
+        value: https://jiwon0524.github.io,http://localhost:5173,http://127.0.0.1:5173
       - key: DATA_FILE
         value: /var/data/sqlvisual-data.json
       - key: SQLITE_FILE
