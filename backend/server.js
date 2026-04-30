@@ -40,21 +40,14 @@ const CONFIG = {
   NAVER_CALLBACK_URL: process.env.NAVER_CALLBACK_URL || DEPLOY_CALLBACK_URL,
   FRONTEND_URL: process.env.FRONTEND_URL || PUBLIC_FRONTEND_URL,
   CORS_ORIGINS: process.env.CORS_ORIGINS || DEFAULT_CORS_ORIGINS,
-  ADMIN_NAVER_IDS: process.env.ADMIN_NAVER_IDS || "",
-  ADMIN_EMAILS: process.env.ADMIN_EMAILS || "",
 };
 
 const allowedOrigins = [...new Set(
   `${DEFAULT_CORS_ORIGINS},${CONFIG.CORS_ORIGINS}`.split(",").map(origin => origin.trim()).filter(Boolean)
 )];
-const adminNaverIds = new Set(CONFIG.ADMIN_NAVER_IDS.split(",").map(item => item.trim()).filter(Boolean));
-const adminEmails = new Set(CONFIG.ADMIN_EMAILS.split(",").map(item => item.trim().toLowerCase()).filter(Boolean));
 
-function isAdminUser(user) {
-  if (!user) return false;
-  const naverId = String(user.naver_id || "").trim();
-  const email = String(user.email || "").trim().toLowerCase();
-  return (naverId && adminNaverIds.has(naverId)) || (email && adminEmails.has(email));
+function isAdminUser() {
+  return false;
 }
 
 function isPlaceholder(value) {
@@ -549,8 +542,6 @@ function publicUser(user) {
     created_at: user.created_at,
     updated_at: user.updated_at,
     needs_display_name: !user.display_name,
-    is_admin: isAdminUser(user),
-    is_blocked: Boolean(user.is_blocked),
   };
 }
 
@@ -621,14 +612,12 @@ function optionalAuth(req, res, next) {
 }
 
 function isAdminRequest(req, store) {
-  const user = findUser(store, req.user?.id);
-  return isAdminUser(user);
+  return false;
 }
 
 function requireActiveUser(req, res, next) {
   const user = findUser(loadStore(), req.user?.id);
   if (!user) return res.status(404).json({ error: "User not found." });
-  if (user.is_blocked && !isAdminUser(user)) return res.status(403).json({ error: "This account is blocked from writing." });
   next();
 }
 
@@ -731,13 +720,18 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json({ limit: "1mb" }));
+app.use("/api/admin", (req, res) => {
+  res.status(404).json({ error: "Admin features are disabled." });
+});
+app.use("/api/reports", (req, res) => {
+  res.status(404).json({ error: "Report features are disabled." });
+});
 
 app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
     service: "SQLVisual API",
     naverConfigured: isNaverConfigured(),
-    adminConfigured: adminNaverIds.size > 0 || adminEmails.size > 0,
     store: USE_SQLITE_STORE ? "sqlite" : "json",
     sqliteAvailable: Boolean(DatabaseSync),
     persistentStore: (USE_SQLITE_STORE ? SQLITE_FILE : DATA_FILE).startsWith(`${RENDER_DISK_DIR}/`),

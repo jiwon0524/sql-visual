@@ -21,10 +21,6 @@ services:
         value: /var/data/sqlvisual-data.sqlite
       - key: STORE_ENGINE
         value: sqlite
-      - key: ADMIN_NAVER_IDS
-        sync: false
-      - key: ADMIN_EMAILS
-        sync: false
       - key: NAVER_CLIENT_ID
         sync: false
       - key: NAVER_CLIENT_SECRET

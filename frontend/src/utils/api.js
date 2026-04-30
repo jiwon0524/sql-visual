@@ -93,17 +93,6 @@ export const api = {
   createComment: (id, content) => req("POST", `/shared/${id}/comments`, { content }),
   updateComment: (id, content) => req("PATCH", `/comments/${id}`, { content }),
   deleteComment: id => req("DELETE", `/comments/${id}`),
-  report: data => req("POST", "/reports", data),
-  adminSummary: () => req("GET", "/admin/summary"),
-  adminReports: params => req("GET", `/admin/reports${params ? `?${new URLSearchParams(params)}` : ""}`),
-  updateAdminReport: (id, data) => req("PATCH", `/admin/reports/${id}`, data),
-  adminShared: params => req("GET", `/admin/shared${params ? `?${new URLSearchParams(params)}` : ""}`),
-  updateAdminShared: (id, data) => req("PATCH", `/admin/shared/${id}`, data),
-  adminComments: params => req("GET", `/admin/comments${params ? `?${new URLSearchParams(params)}` : ""}`),
-  updateAdminComment: (id, data) => req("PATCH", `/admin/comments/${id}`, data),
-  adminUsers: params => req("GET", `/admin/users${params ? `?${new URLSearchParams(params)}` : ""}`),
-  updateAdminUser: (id, data) => req("PATCH", `/admin/users/${id}`, data),
-  adminExportUrl: () => `${BASE}/admin/export`,
 };
 
 export const authStore = {
@@ -126,8 +115,6 @@ export const authStore = {
         email: p.email,
         profile_image: p.profile_image,
         needs_display_name: Boolean(p.needs_display_name),
-        is_admin: Boolean(p.is_admin),
-        is_blocked: Boolean(p.is_blocked),
       };
     } catch {
       return null;

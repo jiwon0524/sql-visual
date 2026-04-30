@@ -901,7 +901,6 @@ function NavBar({ page, setPage, user, onLogout }) {
     ["shared", "공유 게시판"],
   ];
   if (user && !user.local) items.push(["mypage", "마이페이지"]);
-  if (user?.is_admin) items.push(["admin", "운영"]);
 
   return (
     <header style={{ height: 50, borderBottom: `1px solid ${C.line}`, background: C.panel, display: "flex", alignItems: "center", padding: "0 clamp(10px, 3vw, 18px)", gap: 10, overflow: "hidden" }}>
@@ -2202,43 +2201,6 @@ function SharedDetail({ id, user, setPage, loadExample }) {
     }
   };
 
-  const reportTarget = async (targetType, targetId) => {
-    if (!user || user.local) {
-      setMessage("신고는 네이버 로그인이 필요합니다.");
-      return;
-    }
-    const details = window.prompt("신고 사유를 적어주세요.", "");
-    if (details === null) return;
-    try {
-      await api.report({ target_type: targetType, target_id: targetId, reason: "user_report", details });
-      setMessage("신고가 접수되었습니다.");
-    } catch (err) {
-      setMessage(err.message);
-    }
-  };
-
-  const moderateShared = async isHidden => {
-    const moderationReason = isHidden ? window.prompt("숨김 사유", doc?.moderation_reason || "") : "";
-    if (isHidden && moderationReason === null) return;
-    try {
-      await api.updateAdminShared(doc.id, { is_hidden: isHidden, moderation_reason: moderationReason || "" });
-      refresh();
-    } catch (err) {
-      setMessage(err.message);
-    }
-  };
-
-  const moderateComment = async (commentId, isHidden) => {
-    const moderationReason = isHidden ? window.prompt("숨김 사유", "") : "";
-    if (isHidden && moderationReason === null) return;
-    try {
-      await api.updateAdminComment(commentId, { is_hidden: isHidden, moderation_reason: moderationReason || "" });
-      refresh();
-    } catch (err) {
-      setMessage(err.message);
-    }
-  };
-
   const schemas = doc?.schema?.length ? doc.schema : schemasFromSql(doc?.sql_code || "");
 
   return (
@@ -2250,8 +2212,6 @@ function SharedDetail({ id, user, setPage, loadExample }) {
           <Panel title={doc.title} action={
             <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
               <Button variant="primary" onClick={copyToWorkspace}>내 작업공간으로 복사</Button>
-              {user && !user.local && <Button onClick={() => reportTarget("shared", doc.id)}>신고</Button>}
-              {user?.is_admin && <Button variant={doc.is_hidden ? "default" : "danger"} onClick={() => moderateShared(!doc.is_hidden)}>{doc.is_hidden ? "숨김 해제" : "운영 숨김"}</Button>}
             </div>
           }>
             <p style={{ margin: "0 0 12px", color: C.sub, fontSize: 13, lineHeight: 1.6 }}>{doc.description || "설명이 없습니다."}</p>
@@ -2275,8 +2235,6 @@ function SharedDetail({ id, user, setPage, loadExample }) {
                   <p style={{ margin: 0, color: C.sub, fontSize: 12, lineHeight: 1.6 }}>{item.content}</p>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
                     {user?.id === item.user_id && <Button variant="ghost" onClick={() => removeComment(item.id)}>삭제</Button>}
-                    {user && !user.local && <Button variant="ghost" onClick={() => reportTarget("comment", item.id)}>신고</Button>}
-                    {user?.is_admin && <Button variant={item.is_hidden ? "default" : "danger"} onClick={() => moderateComment(item.id, !item.is_hidden)}>{item.is_hidden ? "숨김 해제" : "운영 숨김"}</Button>}
                   </div>
                 </div>
               ))}
@@ -3215,7 +3173,6 @@ export default function App() {
       {page === "shared" && <SharedBoard onOpenShared={openShared} />}
       {page === "shared-detail" && <SharedDetail id={sharedDetailId} user={user} setPage={setPage} loadExample={loadExample} />}
       {page === "mypage" && <MyPage user={user} onUserUpdate={handleUserUpdate} />}
-      {page === "admin" && <AdminPage user={user} setPage={setPage} />}
       {page === "display-name" && <DisplayNameSetup user={user} onComplete={nextUser => { handleUserUpdate(nextUser); setPage("editor"); }} />}
       {page === "login" && <LoginPage onLogin={handleLogin} authMessage={authMessage} />}
     </div>
