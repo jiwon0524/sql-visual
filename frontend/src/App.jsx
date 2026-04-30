@@ -3049,7 +3049,6 @@ function LoginPage({ onLogin, authMessage }) {
       const returnTo = new URL(import.meta.env.BASE_URL || "/", window.location.origin).toString();
       const { url } = await api.naverLoginUrl({
         returnTo,
-        authType: "reauthenticate",
       });
       window.location.href = url;
     } catch (err) {
