@@ -15,8 +15,6 @@ dist-ssr
 .env.*
 !.env.example
 backend/sqlvisual-data.json
-backend/sqlvisual-data.json.*
-backend/sqlvisual-data.sqlite*
 
 # Editor directories and files
 .vscode/*

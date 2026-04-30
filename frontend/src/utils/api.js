@@ -52,13 +52,15 @@ async function req(method, path, body = null) {
       headers,
       body: body ? JSON.stringify(body) : null,
       signal: controller.signal,
-      credentials: "include",
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `서버 오류가 발생했습니다. (${res.status})`);
+    if (res.status === 404) {
+      throw new Error("백엔드 API가 최신 버전이 아닙니다. Render 배포 상태를 확인하세요.");
+    }
+    if (!res.ok) throw new Error(data.error || "서버 오류가 발생했습니다.");
     return data;
   } catch (err) {
-    if (err.name === "AbortError") throw new Error("백엔드 API 연결 시간이 초과되었습니다. 잠시 후 다시 시도하세요.");
+    if (err.name === "AbortError") throw new Error("백엔드 API 연결 시간이 초과되었습니다. Render 무료 서버가 깨어나는 중이면 잠시 뒤 다시 시도하세요.");
     throw err;
   } finally {
     window.clearTimeout(timeout);
@@ -73,8 +75,6 @@ export const api = {
     if (authType) params.set("authType", authType);
     return req("GET", `/auth/naver${params.toString() ? `?${params}` : ""}`);
   },
-  logout: () => req("POST", "/auth/logout"),
-  exchangeSession: code => req("POST", "/auth/session", { code }),
   me: () => req("GET", "/me"),
   updateDisplayName: display_name => req("PATCH", "/me/display-name", { display_name }),
   getDocs: () => req("GET", "/documents"),
