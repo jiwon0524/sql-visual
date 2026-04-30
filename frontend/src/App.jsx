@@ -3150,7 +3150,7 @@ export default function App() {
         ? api.exchangeSession(code).then(result => {
             authStore.save(result.token);
             return result.user;
-          })
+          }).catch(() => api.me())
         : api.me();
       loginPromise
         .then(fullUser => {
