@@ -173,7 +173,7 @@ function publicUser(user) {
 }
 
 function signUser(user) {
-  return jwt.sign(publicUser(user), CONFIG.JWT_SECRET, { expiresIn: "7d" });
+  return jwt.sign(publicUser(user), CONFIG.JWT_SECRET, { expiresIn: "24h" });
 }
 
 function findUser(store, id) {

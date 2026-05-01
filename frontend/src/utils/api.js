@@ -19,6 +19,13 @@ export const BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://sql-visual
 const BASE = normalizeApiBase(BASE_URL);
 const NAVER_CLIENT_ID = import.meta.env.VITE_NAVER_CLIENT_ID || "ZcAQXQflPN3rEYKQt2Cb";
 const NAVER_CALLBACK_URL = import.meta.env.VITE_NAVER_CALLBACK_URL || "https://sql-visual.onrender.com/api/auth/naver/callback";
+const TOKEN_KEY = "sv_token";
+const LAST_ACTIVE_KEY = "sv_last_active_at";
+const HIDDEN_AT_KEY = "sv_hidden_at";
+export const SESSION_LIMITS = {
+  idleMs: 2 * 60 * 60 * 1000,
+  awayMs: 60 * 60 * 1000,
+};
 
 export const apiBase = BASE;
 
@@ -26,8 +33,29 @@ export function hasApiBase() {
   return Boolean(BASE);
 }
 
+function clearAuthSession() {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(LAST_ACTIVE_KEY);
+  localStorage.removeItem(HIDDEN_AT_KEY);
+}
+
+function sessionExpired() {
+  if (!localStorage.getItem(TOKEN_KEY)) return false;
+  const now = Date.now();
+  const lastActive = Number(localStorage.getItem(LAST_ACTIVE_KEY) || 0);
+  const hiddenAt = Number(localStorage.getItem(HIDDEN_AT_KEY) || 0);
+  return Boolean(
+    (lastActive && now - lastActive > SESSION_LIMITS.idleMs)
+    || (hiddenAt && now - hiddenAt > SESSION_LIMITS.awayMs)
+  );
+}
+
 function token() {
-  return localStorage.getItem("sv_token");
+  if (sessionExpired()) {
+    clearAuthSession();
+    return null;
+  }
+  return localStorage.getItem(TOKEN_KEY);
 }
 
 function encodeNaverState(returnTo) {
@@ -109,16 +137,38 @@ export const api = {
 };
 
 export const authStore = {
-  save: t => localStorage.setItem("sv_token", t),
-  clear: () => localStorage.removeItem("sv_token"),
-  get: () => localStorage.getItem("sv_token"),
+  save: t => {
+    localStorage.setItem(TOKEN_KEY, t);
+    localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()));
+    localStorage.removeItem(HIDDEN_AT_KEY);
+  },
+  clear: clearAuthSession,
+  get: token,
+  touch: () => {
+    if (localStorage.getItem(TOKEN_KEY)) localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()));
+  },
+  markHidden: () => {
+    if (localStorage.getItem(TOKEN_KEY)) localStorage.setItem(HIDDEN_AT_KEY, String(Date.now()));
+  },
+  markVisible: () => {
+    if (sessionExpired()) {
+      clearAuthSession();
+      return false;
+    }
+    if (localStorage.getItem(TOKEN_KEY)) {
+      localStorage.removeItem(HIDDEN_AT_KEY);
+      localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()));
+    }
+    return true;
+  },
+  isExpired: sessionExpired,
   getUser: () => {
-    const t = localStorage.getItem("sv_token");
+    const t = token();
     if (!t) return null;
     try {
       const p = decodeJwtPayload(t);
       if (!p || p.exp * 1000 < Date.now()) {
-        localStorage.removeItem("sv_token");
+        clearAuthSession();
         return null;
       }
       return {

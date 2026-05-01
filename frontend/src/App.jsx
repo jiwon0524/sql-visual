@@ -35,6 +35,7 @@ const STORAGE = {
 };
 
 const LOCAL_USER = { id: "local", display_name: "체험 사용자", username: "체험 사용자", local: true };
+const AUTO_LOGOUT_MESSAGE = "보안을 위해 일정 시간 이용이 없어 자동 로그아웃되었습니다.";
 
 let sqlJsRuntimePromise;
 
@@ -2788,10 +2789,19 @@ function initialPage() {
   return getWorkspaceDraft() ? "editor" : "home";
 }
 
+function initialUser() {
+  const sessionUser = authStore.getUser();
+  if (sessionUser) return sessionUser;
+  const storedUser = readJSON(STORAGE.user, null);
+  if (storedUser?.local) return storedUser;
+  localStorage.removeItem(STORAGE.user);
+  return null;
+}
+
 export default function App() {
   const [page, setPage] = useState(initialPage);
   const [incomingSql, setIncomingSql] = useState(null);
-  const [user, setUser] = useState(() => authStore.getUser() || readJSON(STORAGE.user, null));
+  const [user, setUser] = useState(initialUser);
   const [authMessage, setAuthMessage] = useState("");
   const [sharedDetailId, setSharedDetailId] = useState(null);
 
@@ -2808,6 +2818,58 @@ export default function App() {
   useEffect(() => {
     if (RESTORABLE_PAGES.has(page)) writeJSON(STORAGE.page, page);
   }, [page]);
+
+  const handleLogout = useCallback((message = "") => {
+    authStore.clear();
+    localStorage.removeItem(STORAGE.user);
+    setUser(null);
+    setAuthMessage(message);
+    setPage(message ? "login" : "home");
+  }, []);
+
+  useEffect(() => {
+    if (!user || user.local || !authStore.get()) return;
+
+    let lastTouchWrite = 0;
+    const autoLogout = () => handleLogout(AUTO_LOGOUT_MESSAGE);
+    const checkSession = () => {
+      if (!authStore.get()) autoLogout();
+    };
+    const touchSession = () => {
+      if (!authStore.get()) {
+        autoLogout();
+        return;
+      }
+      const now = Date.now();
+      if (now - lastTouchWrite > 30 * 1000) {
+        authStore.touch();
+        lastTouchWrite = now;
+      }
+    };
+    const handleVisibility = () => {
+      if (document.hidden) {
+        authStore.markHidden();
+        return;
+      }
+      if (!authStore.markVisible()) autoLogout();
+    };
+
+    const activityEvents = ["click", "keydown", "pointerdown", "scroll", "touchstart"];
+    activityEvents.forEach(event => window.addEventListener(event, touchSession, { passive: true }));
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("focus", handleVisibility);
+    window.addEventListener("pagehide", authStore.markHidden);
+    const timer = window.setInterval(checkSession, 60 * 1000);
+    authStore.touch();
+
+    return () => {
+      activityEvents.forEach(event => window.removeEventListener(event, touchSession));
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("focus", handleVisibility);
+      window.removeEventListener("pagehide", authStore.markHidden);
+      window.clearInterval(timer);
+    };
+  }, [handleLogout, user]);
 
   useEffect(() => {
     if (authStore.get()) {
@@ -2868,13 +2930,6 @@ export default function App() {
   const handleUserUpdate = nextUser => {
     setUser(nextUser);
     writeJSON(STORAGE.user, nextUser);
-  };
-
-  const handleLogout = () => {
-    authStore.clear();
-    localStorage.removeItem(STORAGE.user);
-    setUser(null);
-    setPage("home");
   };
 
   return (
