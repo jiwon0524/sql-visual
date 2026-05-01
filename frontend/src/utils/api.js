@@ -17,6 +17,8 @@ export function normalizeApiBase(value) {
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://sql-visual.onrender.com";
 const BASE = normalizeApiBase(BASE_URL);
+const NAVER_CLIENT_ID = import.meta.env.VITE_NAVER_CLIENT_ID || "ZcAQXQflPN3rEYKQt2Cb";
+const NAVER_CALLBACK_URL = import.meta.env.VITE_NAVER_CALLBACK_URL || "https://sql-visual.onrender.com/api/auth/naver/callback";
 
 export const apiBase = BASE;
 
@@ -26,6 +28,14 @@ export function hasApiBase() {
 
 function token() {
   return localStorage.getItem("sv_token");
+}
+
+function encodeNaverState(returnTo) {
+  const payload = JSON.stringify({
+    nonce: Math.random().toString(36).slice(2),
+    returnTo,
+  });
+  return btoa(payload).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
 function decodeJwtPayload(jwt) {
@@ -70,9 +80,13 @@ async function req(method, path, body = null) {
 export const api = {
   health: () => req("GET", "/health"),
   naverLoginUrl: ({ returnTo } = {}) => {
-    const params = new URLSearchParams();
-    if (returnTo) params.set("returnTo", returnTo);
-    return req("GET", `/auth/naver${params.toString() ? `?${params}` : ""}`);
+    const params = new URLSearchParams({
+      response_type: "code",
+      client_id: NAVER_CLIENT_ID,
+      redirect_uri: NAVER_CALLBACK_URL,
+      state: encodeNaverState(returnTo || window.location.href),
+    });
+    return { url: `https://nid.naver.com/oauth2.0/authorize?${params}` };
   },
   me: () => req("GET", "/me"),
   updateDisplayName: display_name => req("PATCH", "/me/display-name", { display_name }),

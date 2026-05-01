@@ -26,7 +26,18 @@ const CONFIG = {
   CORS_ORIGINS: process.env.CORS_ORIGINS || "https://jiwon0524.github.io",
 };
 
-const allowedOrigins = CONFIG.CORS_ORIGINS.split(",").map(origin => origin.trim()).filter(Boolean);
+const LOCAL_DEV_ORIGINS = [
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "http://localhost:4173",
+  "http://127.0.0.1:4173",
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+];
+const allowedOrigins = Array.from(new Set([
+  ...CONFIG.CORS_ORIGINS.split(",").map(origin => origin.trim()).filter(Boolean),
+  ...LOCAL_DEV_ORIGINS,
+]));
 
 function isPlaceholder(value) {
   return !value || /^(YOUR_|your_)/.test(value);
