@@ -120,16 +120,7 @@ async function req(method, path, body = null, options = {}) {
 
 export const api = {
   health: () => req("GET", "/health", null, { timeoutMs: 8000 }),
-  naverLoginUrl: ({ returnTo } = {}) => {
-    const params = new URLSearchParams({
-      response_type: "code",
-      client_id: NAVER_CLIENT_ID,
-      redirect_uri: naverCallbackUrl(),
-      state: encodeNaverState(returnTo || window.location.href),
-      auth_type: "reauthenticate",
-    });
-    return { url: `https://nid.naver.com/oauth2.0/authorize?${params}` };
-  },
+  naverLoginUrl: ({ returnTo } = {}) => req("GET", `/auth/naver?${new URLSearchParams({ returnTo: returnTo || window.location.href })}`),
   exchangeNaverCode: ({ code, state, redirectUri }) => req("POST", "/auth/naver/token", { code, state, redirect_uri: redirectUri }, { timeoutMs: 60000 }),
   me: () => req("GET", "/me"),
   updateDisplayName: display_name => req("PATCH", "/me/display-name", { display_name }),
