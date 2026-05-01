@@ -193,16 +193,22 @@ function signUser(user) {
 }
 
 async function completeNaverLogin({ code, state, redirectUri }) {
-  const tokenRes = await axios.post("https://nid.naver.com/oauth2.0/token", null, {
-    params: {
-      grant_type: "authorization_code",
-      client_id: CONFIG.NAVER_CLIENT_ID,
-      client_secret: CONFIG.NAVER_CLIENT_SECRET,
-      redirect_uri: redirectUri,
-      code,
-      state,
-    },
-  });
+  const tokenParams = {
+    grant_type: "authorization_code",
+    client_id: CONFIG.NAVER_CLIENT_ID,
+    client_secret: CONFIG.NAVER_CLIENT_SECRET,
+    code,
+    state,
+  };
+  let tokenRes;
+  try {
+    tokenRes = await axios.post("https://nid.naver.com/oauth2.0/token", null, { params: tokenParams });
+  } catch (err) {
+    if (!redirectUri) throw err;
+    tokenRes = await axios.post("https://nid.naver.com/oauth2.0/token", null, {
+      params: { ...tokenParams, redirect_uri: redirectUri },
+    });
+  }
 
   const profileRes = await axios.get("https://openapi.naver.com/v1/nid/me", {
     headers: { Authorization: `Bearer ${tokenRes.data.access_token}` },
