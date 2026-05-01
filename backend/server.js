@@ -253,7 +253,6 @@ app.get("/api/auth/naver", (req, res) => {
     redirect_uri: CONFIG.NAVER_CALLBACK_URL,
     state,
   };
-  if (req.query.authType === "reauthenticate") params.auth_type = "reauthenticate";
   res.json({ url: `https://nid.naver.com/oauth2.0/authorize?${new URLSearchParams(params)}` });
 });
 
