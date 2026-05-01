@@ -10,7 +10,7 @@ services:
       - key: NODE_VERSION
         value: 20
       - key: FRONTEND_URL
-        value: https://jiwon0524.github.io/sql-visual
+        value: https://jiwon0524.github.io/sql-visual/
       - key: CORS_ORIGINS
         value: https://jiwon0524.github.io
       - key: DATA_FILE
