@@ -103,6 +103,18 @@ function withQuery(target, key, value) {
   return url.toString();
 }
 
+function naverAuthorizeUrl(returnTo) {
+  const state = encodeState(safeReturnTo(returnTo));
+  const params = {
+    response_type: "code",
+    client_id: CONFIG.NAVER_CLIENT_ID,
+    redirect_uri: CONFIG.NAVER_CALLBACK_URL,
+    state,
+    auth_type: "reauthenticate",
+  };
+  return `https://nid.naver.com/oauth2.0/authorize?${new URLSearchParams(params)}`;
+}
+
 function now() {
   return new Date().toISOString();
 }
@@ -329,15 +341,15 @@ app.get("/api/auth/naver", (req, res) => {
     return res.status(503).json({ error: "NAVER_CLIENT_ID and NAVER_CLIENT_SECRET are required." });
   }
 
-  const returnTo = safeReturnTo(req.query.returnTo);
-  const state = encodeState(returnTo);
-  const params = {
-    response_type: "code",
-    client_id: CONFIG.NAVER_CLIENT_ID,
-    redirect_uri: CONFIG.NAVER_CALLBACK_URL,
-    state,
-  };
-  res.json({ url: `https://nid.naver.com/oauth2.0/authorize?${new URLSearchParams(params)}` });
+  res.json({ url: naverAuthorizeUrl(req.query.returnTo) });
+});
+
+app.get("/api/auth/naver/redirect", (req, res) => {
+  if (!isNaverConfigured()) {
+    return res.redirect(withQuery(CONFIG.FRONTEND_URL, "error", "oauth_failed"));
+  }
+
+  res.redirect(naverAuthorizeUrl(req.query.returnTo));
 });
 
 app.get("/api/auth/naver/callback", async (req, res) => {

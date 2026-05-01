@@ -71,6 +71,16 @@ export function naverBridgeUrl({ code, state, redirectUri } = {}) {
   return `${BASE}/auth/naver/bridge?${params}`;
 }
 
+export function naverLoginRedirectUrl(returnTo) {
+  return `${BASE}/auth/naver/redirect?${new URLSearchParams({ returnTo: returnTo || window.location.href })}`;
+}
+
+export function naverLogoutUrl(returnTo = naverCallbackUrl()) {
+  const url = new URL("https://nid.naver.com/nidlogin.logout");
+  url.searchParams.set("returl", returnTo);
+  return url.toString();
+}
+
 function encodeNaverState(returnTo) {
   const payload = JSON.stringify({
     nonce: Math.random().toString(36).slice(2),

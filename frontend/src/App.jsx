@@ -3,7 +3,7 @@ import Editor from "@monaco-editor/react";
 import sqlJsUrl from "sql.js/dist/sql-wasm.js?url";
 import sqlWasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 import { analyzeError, explainDetailedSQL, parseCreateTable, splitStatements } from "./utils/sqlAnalyzer.js";
-import { api, authStore, hasApiBase, naverBridgeUrl, naverCallbackUrl } from "./utils/api.js";
+import { api, authStore, hasApiBase, naverBridgeUrl, naverCallbackUrl, naverLoginRedirectUrl, naverLogoutUrl } from "./utils/api.js";
 
 const C = {
   bg: "#f6f7f9",
@@ -913,7 +913,7 @@ function NavBar({ page, setPage, user, onLogout }) {
       {user ? (
         <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "0 0 auto" }}>
           <button onClick={() => user.local ? setPage("login") : setPage("mypage")} style={{ border: 0, background: "transparent", color: C.sub, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer", fontSize: 12 }}>{currentName(user)}</button>
-          <Button variant="ghost" onClick={() => onLogout()}>로그아웃</Button>
+          <Button variant="ghost" onClick={() => onLogout("", { naver: !user.local })}>로그아웃</Button>
         </div>
       ) : (
         <Button variant="primary" onClick={() => setPage("login")}>로그인</Button>
@@ -2744,10 +2744,7 @@ function LoginPage({ onLogin, authMessage }) {
     try {
       setMessage("네이버 로그인 페이지로 이동 중입니다.");
       const returnTo = new URL(import.meta.env.BASE_URL || "/", window.location.origin).toString();
-      const { url } = await api.naverLoginUrl({
-        returnTo,
-      });
-      window.location.href = url;
+      window.location.href = naverLoginRedirectUrl(returnTo);
     } catch (err) {
       setMessage(err.message);
     }
@@ -2830,12 +2827,17 @@ export default function App() {
     if (RESTORABLE_PAGES.has(page)) writeJSON(STORAGE.page, page);
   }, [page]);
 
-  const handleLogout = useCallback((message = "") => {
+  const handleLogout = useCallback((message = "", options = {}) => {
     const nextMessage = typeof message === "string" ? message : "";
     authStore.clear();
     localStorage.removeItem(STORAGE.user);
     setUser(null);
     setAuthMessage(nextMessage);
+    if (options?.naver) {
+      setPage("home");
+      window.location.replace(naverLogoutUrl(naverCallbackUrl()));
+      return;
+    }
     setPage(nextMessage ? "login" : "home");
   }, []);
 
