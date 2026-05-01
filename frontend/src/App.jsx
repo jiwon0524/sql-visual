@@ -2816,6 +2816,17 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!hasApiBase()) return;
+    const warmApi = () => api.health().catch(() => {});
+    if ("requestIdleCallback" in window) {
+      const id = window.requestIdleCallback(warmApi, { timeout: 1500 });
+      return () => window.cancelIdleCallback?.(id);
+    }
+    const id = window.setTimeout(warmApi, 600);
+    return () => window.clearTimeout(id);
+  }, []);
+
+  useEffect(() => {
     if (RESTORABLE_PAGES.has(page)) writeJSON(STORAGE.page, page);
   }, [page]);
 

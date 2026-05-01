@@ -78,7 +78,7 @@ function decodeJwtPayload(jwt) {
   return JSON.parse(atob(padded));
 }
 
-async function req(method, path, body = null) {
+async function req(method, path, body = null, options = {}) {
   if (!BASE) {
     throw new Error("백엔드 API 주소가 설정되어 있지 않습니다.");
   }
@@ -87,7 +87,7 @@ async function req(method, path, body = null) {
   if (token()) headers.Authorization = `Bearer ${token()}`;
 
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 20000);
+  const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs || 20000);
   try {
     const res = await fetch(BASE + path, {
       method,
@@ -110,7 +110,7 @@ async function req(method, path, body = null) {
 }
 
 export const api = {
-  health: () => req("GET", "/health"),
+  health: () => req("GET", "/health", null, { timeoutMs: 8000 }),
   naverLoginUrl: ({ returnTo } = {}) => {
     const params = new URLSearchParams({
       response_type: "code",
@@ -121,7 +121,7 @@ export const api = {
     });
     return { url: `https://nid.naver.com/oauth2.0/authorize?${params}` };
   },
-  exchangeNaverCode: ({ code, state, redirectUri }) => req("POST", "/auth/naver/token", { code, state, redirect_uri: redirectUri }),
+  exchangeNaverCode: ({ code, state, redirectUri }) => req("POST", "/auth/naver/token", { code, state, redirect_uri: redirectUri }, { timeoutMs: 60000 }),
   me: () => req("GET", "/me"),
   updateDisplayName: display_name => req("PATCH", "/me/display-name", { display_name }),
   getDocs: () => req("GET", "/documents"),
