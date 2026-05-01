@@ -2916,8 +2916,8 @@ export default function App() {
           setAuthMessage("");
           setPage(fullUser?.needs_display_name ? "display-name" : "editor");
         })
-        .catch(() => {
-          setAuthMessage("네이버 인증 처리 중 오류가 발생했습니다. 잠시 뒤 다시 로그인해 주세요.");
+        .catch(err => {
+          setAuthMessage(`네이버 인증 처리 중 오류가 발생했습니다. ${err.message || "잠시 뒤 다시 로그인해 주세요."}`);
           setPage("login");
         });
       return;

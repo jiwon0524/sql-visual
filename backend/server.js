@@ -209,10 +209,15 @@ async function completeNaverLogin({ code, state, redirectUri }) {
   });
   let tokenRes;
   try {
-    tokenRes = await axios.post("https://nid.naver.com/oauth2.0/token", null, tokenOptions(tokenParams));
+    tokenRes = await axios.post("https://nid.naver.com/oauth2.0/token", null, tokenOptions(
+      redirectUri ? { ...tokenParams, redirect_uri: redirectUri } : tokenParams,
+    ));
   } catch (err) {
-    if (!redirectUri) throw err;
-    tokenRes = await axios.post("https://nid.naver.com/oauth2.0/token", null, tokenOptions({ ...tokenParams, redirect_uri: redirectUri }));
+    if (redirectUri) {
+      tokenRes = await axios.post("https://nid.naver.com/oauth2.0/token", null, tokenOptions(tokenParams));
+    } else {
+      throw err;
+    }
   }
 
   const profileRes = await axios.get("https://openapi.naver.com/v1/nid/me", {
@@ -366,7 +371,9 @@ app.post("/api/auth/naver/token", async (req, res) => {
     res.json({ token: signUser(user), user: publicUser(user) });
   } catch (err) {
     console.error("Naver OAuth exchange error:", err.response?.data || err.message);
-    res.status(401).json({ error: "Naver authentication failed." });
+    const naverError = err.response?.data;
+    const detail = naverError?.error_description || naverError?.error || err.message;
+    res.status(401).json({ error: `Naver authentication failed: ${detail}` });
   }
 });
 
