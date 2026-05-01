@@ -81,6 +81,22 @@ function decodeStateReturnTo(state) {
   }
 }
 
+function safeFrontendCallbackUrl(value) {
+  try {
+    const url = new URL(value || PUBLIC_FRONTEND_URL);
+    const publicUrl = new URL(PUBLIC_FRONTEND_URL);
+    if (url.origin === publicUrl.origin && url.pathname.replace(/\/?$/, "/") === publicUrl.pathname) {
+      url.pathname = publicUrl.pathname;
+      url.search = "";
+      url.hash = "";
+      return url.toString();
+    }
+  } catch {
+    // Fall through to the public callback URL.
+  }
+  return PUBLIC_FRONTEND_URL;
+}
+
 function withQuery(target, key, value) {
   const url = new URL(target);
   url.searchParams.set(key, value);
@@ -174,6 +190,47 @@ function publicUser(user) {
 
 function signUser(user) {
   return jwt.sign(publicUser(user), CONFIG.JWT_SECRET, { expiresIn: "24h" });
+}
+
+async function completeNaverLogin({ code, state, redirectUri }) {
+  const tokenRes = await axios.post("https://nid.naver.com/oauth2.0/token", null, {
+    params: {
+      grant_type: "authorization_code",
+      client_id: CONFIG.NAVER_CLIENT_ID,
+      client_secret: CONFIG.NAVER_CLIENT_SECRET,
+      redirect_uri: redirectUri,
+      code,
+      state,
+    },
+  });
+
+  const profileRes = await axios.get("https://openapi.naver.com/v1/nid/me", {
+    headers: { Authorization: `Bearer ${tokenRes.data.access_token}` },
+  });
+
+  const { id: naverId, email, profile_image } = profileRes.data.response;
+  const store = loadStore();
+  const stamp = now();
+  let user = store.users.find(item => item.naver_id === naverId);
+
+  if (user) {
+    Object.assign(user, { email, profile_image, updated_at: stamp });
+  } else {
+    user = {
+      id: store.counters.user++,
+      naver_id: naverId,
+      email,
+      display_name: null,
+      username: null,
+      profile_image,
+      created_at: stamp,
+      updated_at: stamp,
+    };
+    store.users.push(user);
+  }
+
+  saveStore(store);
+  return user;
 }
 
 function findUser(store, id) {
@@ -273,47 +330,32 @@ app.get("/api/auth/naver/callback", async (req, res) => {
   if (!code) return res.redirect(withQuery(returnTo, "error", "cancelled"));
 
   try {
-    const tokenRes = await axios.post("https://nid.naver.com/oauth2.0/token", null, {
-      params: {
-        grant_type: "authorization_code",
-        client_id: CONFIG.NAVER_CLIENT_ID,
-        client_secret: CONFIG.NAVER_CLIENT_SECRET,
-        redirect_uri: CONFIG.NAVER_CALLBACK_URL,
-        code,
-        state,
-      },
-    });
-
-    const profileRes = await axios.get("https://openapi.naver.com/v1/nid/me", {
-      headers: { Authorization: `Bearer ${tokenRes.data.access_token}` },
-    });
-
-    const { id: naverId, email, profile_image } = profileRes.data.response;
-    const store = loadStore();
-    const stamp = now();
-    let user = store.users.find(item => item.naver_id === naverId);
-
-    if (user) {
-      Object.assign(user, { email, profile_image, updated_at: stamp });
-    } else {
-      user = {
-        id: store.counters.user++,
-        naver_id: naverId,
-        email,
-        display_name: null,
-        username: null,
-        profile_image,
-        created_at: stamp,
-        updated_at: stamp,
-      };
-      store.users.push(user);
-    }
-
-    saveStore(store);
+    const user = await completeNaverLogin({ code, state, redirectUri: CONFIG.NAVER_CALLBACK_URL });
     res.redirect(withQuery(returnTo, "token", signUser(user)));
   } catch (err) {
     console.error("Naver OAuth error:", err.response?.data || err.message);
     res.redirect(withQuery(returnTo, "error", "oauth_failed"));
+  }
+});
+
+app.post("/api/auth/naver/token", async (req, res) => {
+  if (!isNaverConfigured()) {
+    return res.status(503).json({ error: "NAVER_CLIENT_ID and NAVER_CLIENT_SECRET are required." });
+  }
+
+  const { code, state, redirect_uri } = req.body || {};
+  if (!code || !state) return res.status(400).json({ error: "Naver code and state are required." });
+
+  try {
+    const user = await completeNaverLogin({
+      code,
+      state,
+      redirectUri: safeFrontendCallbackUrl(redirect_uri),
+    });
+    res.json({ token: signUser(user), user: publicUser(user) });
+  } catch (err) {
+    console.error("Naver OAuth exchange error:", err.response?.data || err.message);
+    res.status(401).json({ error: "Naver authentication failed." });
   }
 });
 

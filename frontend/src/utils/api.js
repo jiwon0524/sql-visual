@@ -18,7 +18,7 @@ export function normalizeApiBase(value) {
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://sql-visual.onrender.com";
 const BASE = normalizeApiBase(BASE_URL);
 const NAVER_CLIENT_ID = import.meta.env.VITE_NAVER_CLIENT_ID || "ZcAQXQflPN3rEYKQt2Cb";
-const NAVER_CALLBACK_URL = import.meta.env.VITE_NAVER_CALLBACK_URL || "https://sql-visual.onrender.com/api/auth/naver/callback";
+const NAVER_CALLBACK_URL = import.meta.env.VITE_NAVER_CALLBACK_URL || "";
 const TOKEN_KEY = "sv_token";
 const LAST_ACTIVE_KEY = "sv_last_active_at";
 const HIDDEN_AT_KEY = "sv_hidden_at";
@@ -56,6 +56,10 @@ function token() {
     return null;
   }
   return localStorage.getItem(TOKEN_KEY);
+}
+
+export function naverCallbackUrl() {
+  return NAVER_CALLBACK_URL || new URL(import.meta.env.BASE_URL || "/", window.location.origin).toString();
 }
 
 function encodeNaverState(returnTo) {
@@ -111,11 +115,12 @@ export const api = {
     const params = new URLSearchParams({
       response_type: "code",
       client_id: NAVER_CLIENT_ID,
-      redirect_uri: NAVER_CALLBACK_URL,
+      redirect_uri: naverCallbackUrl(),
       state: encodeNaverState(returnTo || window.location.href),
     });
     return { url: `https://nid.naver.com/oauth2.0/authorize?${params}` };
   },
+  exchangeNaverCode: ({ code, state, redirectUri }) => req("POST", "/auth/naver/token", { code, state, redirect_uri: redirectUri }),
   me: () => req("GET", "/me"),
   updateDisplayName: display_name => req("PATCH", "/me/display-name", { display_name }),
   getDocs: () => req("GET", "/documents"),

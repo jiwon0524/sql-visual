@@ -3,7 +3,7 @@ import Editor from "@monaco-editor/react";
 import sqlJsUrl from "sql.js/dist/sql-wasm.js?url";
 import sqlWasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 import { analyzeError, explainDetailedSQL, parseCreateTable, splitStatements } from "./utils/sqlAnalyzer.js";
-import { api, authStore, hasApiBase } from "./utils/api.js";
+import { api, authStore, hasApiBase, naverCallbackUrl } from "./utils/api.js";
 
 const C = {
   bg: "#f6f7f9",
@@ -2883,6 +2883,8 @@ export default function App() {
     }
     const params = new URLSearchParams(window.location.search);
     const token = params.get("token");
+    const code = params.get("code");
+    const state = params.get("state");
     const error = params.get("error");
     if (token) {
       authStore.save(token);
@@ -2898,6 +2900,26 @@ export default function App() {
         })
         .catch(() => {});
       window.history.replaceState({}, "", window.location.pathname);
+      return;
+    }
+    if (code && state) {
+      window.history.replaceState({}, "", window.location.pathname);
+      setAuthMessage("네이버 로그인 처리 중입니다.");
+      setPage("login");
+      api.exchangeNaverCode({ code, state, redirectUri: naverCallbackUrl() })
+        .then(({ token: nextToken, user: nextUser }) => {
+          authStore.save(nextToken);
+          const decodedUser = authStore.getUser();
+          const fullUser = nextUser || decodedUser;
+          setUser(fullUser);
+          writeJSON(STORAGE.user, fullUser);
+          setAuthMessage("");
+          setPage(fullUser?.needs_display_name ? "display-name" : "editor");
+        })
+        .catch(() => {
+          setAuthMessage("네이버 인증 처리 중 오류가 발생했습니다. 잠시 뒤 다시 로그인해 주세요.");
+          setPage("login");
+        });
       return;
     }
     if (error) {
