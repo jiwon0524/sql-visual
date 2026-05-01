@@ -377,6 +377,28 @@ app.post("/api/auth/naver/token", async (req, res) => {
   }
 });
 
+app.get("/api/auth/naver/bridge", async (req, res) => {
+  if (!isNaverConfigured()) {
+    return res.redirect(withQuery(CONFIG.FRONTEND_URL, "error", "oauth_failed"));
+  }
+
+  const { code, state, redirect_uri } = req.query;
+  const returnTo = decodeStateReturnTo(state);
+  if (!code || !state) return res.redirect(withQuery(returnTo, "error", "oauth_failed"));
+
+  try {
+    const user = await completeNaverLogin({
+      code,
+      state,
+      redirectUri: safeFrontendCallbackUrl(redirect_uri),
+    });
+    res.redirect(withQuery(returnTo, "token", signUser(user)));
+  } catch (err) {
+    console.error("Naver OAuth bridge error:", err.response?.data || err.message);
+    res.redirect(withQuery(returnTo, "error", "oauth_failed"));
+  }
+});
+
 app.get("/api/me", auth, (req, res) => {
   const user = findUser(loadStore(), req.user.id);
   if (!user) return res.status(404).json({ error: "User not found." });
