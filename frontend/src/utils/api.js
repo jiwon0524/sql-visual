@@ -126,6 +126,7 @@ export const api = {
       client_id: NAVER_CLIENT_ID,
       redirect_uri: naverCallbackUrl(),
       state: encodeNaverState(returnTo || window.location.href),
+      auth_type: "reauthenticate",
     });
     return { url: `https://nid.naver.com/oauth2.0/authorize?${params}` };
   },

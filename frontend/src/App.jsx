@@ -913,7 +913,7 @@ function NavBar({ page, setPage, user, onLogout }) {
       {user ? (
         <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "0 0 auto" }}>
           <button onClick={() => user.local ? setPage("login") : setPage("mypage")} style={{ border: 0, background: "transparent", color: C.sub, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer", fontSize: 12 }}>{currentName(user)}</button>
-          <Button variant="ghost" onClick={onLogout}>로그아웃</Button>
+          <Button variant="ghost" onClick={() => onLogout()}>로그아웃</Button>
         </div>
       ) : (
         <Button variant="primary" onClick={() => setPage("login")}>로그인</Button>
@@ -2820,11 +2820,12 @@ export default function App() {
   }, [page]);
 
   const handleLogout = useCallback((message = "") => {
+    const nextMessage = typeof message === "string" ? message : "";
     authStore.clear();
     localStorage.removeItem(STORAGE.user);
     setUser(null);
-    setAuthMessage(message);
-    setPage(message ? "login" : "home");
+    setAuthMessage(nextMessage);
+    setPage(nextMessage ? "login" : "home");
   }, []);
 
   useEffect(() => {
