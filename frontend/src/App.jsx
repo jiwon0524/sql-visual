@@ -2736,15 +2736,12 @@ function LoginPage({ onLogin, authMessage }) {
       setMessage("백엔드 API 연결이 필요합니다.");
       return;
     }
-    if (apiStatus === "offline" || apiStatus === "checking") {
-      setMessage("백엔드 서버에 연결할 수 없습니다.");
-      return;
-    }
     if (apiStatus === "missing-oauth") {
       setMessage("네이버 로그인 설정이 필요합니다.");
       return;
     }
     try {
+      setMessage("네이버 로그인 페이지로 이동 중입니다.");
       const returnTo = new URL(import.meta.env.BASE_URL || "/", window.location.origin).toString();
       const { url } = await api.naverLoginUrl({
         returnTo,
@@ -2758,7 +2755,7 @@ function LoginPage({ onLogin, authMessage }) {
   return (
     <main style={{ maxWidth: 420, margin: "60px auto", padding: 20 }}>
       <Panel title="로그인">
-        <Button variant="primary" onClick={naverLogin} disabled={apiStatus !== "online"} style={{ width: "100%" }}>네이버 로그인</Button>
+        <Button variant="primary" onClick={naverLogin} disabled={!hasApiBase()} style={{ width: "100%" }}>네이버 로그인</Button>
         <Button onClick={() => onLogin(LOCAL_USER)} style={{ width: "100%", marginTop: 8 }}>체험 모드로 계속</Button>
         {message && <p style={{ margin: "12px 0 0", color: C.warn, fontSize: 12, lineHeight: 1.5 }}>{message}</p>}
       </Panel>
