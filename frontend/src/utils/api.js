@@ -62,15 +62,6 @@ export function naverCallbackUrl() {
   return NAVER_CALLBACK_URL || new URL(import.meta.env.BASE_URL || "/", window.location.origin).toString();
 }
 
-export function naverBridgeUrl({ code, state, redirectUri } = {}) {
-  const params = new URLSearchParams({
-    code: code || "",
-    state: state || "",
-    redirect_uri: redirectUri || naverCallbackUrl(),
-  });
-  return `${BASE}/auth/naver/bridge?${params}`;
-}
-
 function encodeNaverState(returnTo) {
   const payload = JSON.stringify({
     nonce: Math.random().toString(36).slice(2),
@@ -130,6 +121,7 @@ export const api = {
     });
     return { url: `https://nid.naver.com/oauth2.0/authorize?${params}` };
   },
+  exchangeNaverCode: ({ code, state, redirectUri }) => req("POST", "/auth/naver/token", { code, state, redirect_uri: redirectUri }),
   me: () => req("GET", "/me"),
   updateDisplayName: display_name => req("PATCH", "/me/display-name", { display_name }),
   getDocs: () => req("GET", "/documents"),
