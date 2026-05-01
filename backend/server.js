@@ -200,14 +200,19 @@ async function completeNaverLogin({ code, state, redirectUri }) {
     code,
     state,
   };
+  const tokenOptions = params => ({
+    params,
+    headers: {
+      "X-Naver-Client-Id": CONFIG.NAVER_CLIENT_ID,
+      "X-Naver-Client-Secret": CONFIG.NAVER_CLIENT_SECRET,
+    },
+  });
   let tokenRes;
   try {
-    tokenRes = await axios.post("https://nid.naver.com/oauth2.0/token", null, { params: tokenParams });
+    tokenRes = await axios.post("https://nid.naver.com/oauth2.0/token", null, tokenOptions(tokenParams));
   } catch (err) {
     if (!redirectUri) throw err;
-    tokenRes = await axios.post("https://nid.naver.com/oauth2.0/token", null, {
-      params: { ...tokenParams, redirect_uri: redirectUri },
-    });
+    tokenRes = await axios.post("https://nid.naver.com/oauth2.0/token", null, tokenOptions({ ...tokenParams, redirect_uri: redirectUri }));
   }
 
   const profileRes = await axios.get("https://openapi.naver.com/v1/nid/me", {
