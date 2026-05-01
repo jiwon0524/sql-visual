@@ -267,6 +267,7 @@ app.get("/api/auth/naver/callback", async (req, res) => {
         grant_type: "authorization_code",
         client_id: CONFIG.NAVER_CLIENT_ID,
         client_secret: CONFIG.NAVER_CLIENT_SECRET,
+        redirect_uri: CONFIG.NAVER_CALLBACK_URL,
         code,
         state,
       },
